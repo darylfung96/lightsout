@@ -13,6 +13,13 @@ check() { # check <label> <want> <got>
 
 reset() { rm -rf jobs/noop/state jobs/noop/out jobs/noop/logs; }
 
+# spend_today — what the dashboard says the fixture has spent today, in cents.
+spend_today() {
+  bin/job status --all --json | python3 -c '
+import json,sys
+print([r for r in json.load(sys.stdin) if r["name"]=="noop"][0]["spend_today"])'
+}
+
 # 1 — a fresh run finishes and writes its marker
 reset
 bin/job run noop >/dev/null 2>&1; check "fresh run exits 0" 0 "$?"
@@ -232,6 +239,43 @@ check "third stage attempt is a human block" \
   "human|stage 1 attempt cap reached (2 of 2 today)" "$row"
 check "only the stage's own attempts are counted" 2 \
   "$(find jobs/noop/state/attempts -maxdepth 1 -name "$(date +%F).1.attempt-*" | wc -l | tr -d ' ')"
+
+# 13 — spend is recorded per unit, capped, and never charged twice
+reset
+bin/job run noop >/dev/null 2>&1
+check "the paid run completes" 0 "$?"
+check "spend_today sums today's ledger" 25 "$(spend_today)"
+check "the ledger books 25c for stage 1" "25|stage 1" \
+  "$(awk -F'\t' 'NR==1{print $2"|"$3}' jobs/noop/state/ledger.tsv)"
+check "the ledger line names the unit" "$(date +%F)" \
+  "$(awk -F'\t' 'NR==1{print $4}' jobs/noop/state/ledger.tsv)"
+# the day guard holds a second run before it can reach the paid stage
+bin/job run noop >/dev/null 2>&1
+check "a held re-run books nothing" 25 "$(spend_today)"
+
+# only today's lines are today's money: an old line is neither reported nor capped
+reset
+mkdir -p jobs/noop/state
+printf '2020-01-01T00:00:00-0600\t900\tstage 1\t2020-01-01\n' > jobs/noop/state/ledger.tsv
+U_SPEND_CAP=100 bin/job run noop >/dev/null 2>&1
+check "a run under the cap is not blocked by old spend" 0 "$?"
+check "yesterday's spend is not counted today" 25 "$(spend_today)"
+
+# the run that crosses the cap stops and names the number
+reset
+U_SPEND_CAP=10 bin/job run noop >/dev/null 2>&1; check "spend cap blocks" 2 "$?"
+check "the spend block is a human stop" \
+  "human|spend cap reached (25 of 10 cents today)" \
+  "$(bin/job status --all --json | python3 -c '
+import json,sys
+r=[x for x in json.load(sys.stdin) if x["name"]=="noop"][0]
+print("%s|%s" % (r["class"], r["detail"]))')"
+
+# review focus 3: a partial failure that is retried pays for the unit once
+reset
+NOOP_BLOCK=1 NOOP_CLASS=retryable bin/job run noop >/dev/null 2>&1
+bin/job retry noop >/dev/null 2>&1; check "the retried run finishes" 0 "$?"
+check "a retry does not double-charge" 25 "$(spend_today)"
 
 reset
 echo

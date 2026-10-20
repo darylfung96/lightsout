@@ -33,6 +33,30 @@ def iso(path, fallback=None):
         return fallback
 
 
+def spend_today(st):
+    """Cents booked today in state/ledger.tsv.
+
+    The ledger is <iso>TAB<cents>TAB<label>TAB<unit>, one line per charge; only
+    lines whose date is today are today's money, which is the same filter
+    u_guard_spend applies.
+    """
+    today = time.strftime("%Y-%m-%d")
+    try:
+        lines = open(os.path.join(st, "ledger.tsv"), errors="replace").read().splitlines()
+    except OSError:
+        return 0
+    total = 0
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) < 2 or not parts[0].startswith(today):
+            continue
+        try:
+            total += int(parts[1])
+        except ValueError:
+            continue
+    return total
+
+
 def job_state(name):
     d = os.path.join(REPO, "jobs", name)
     st = os.path.join(d, "state")
@@ -49,6 +73,7 @@ def job_state(name):
         "since": None,
         "stage": "",
         "attempts_today": 0,
+        "spend_today": 0,
         "last_exit": None,
         "last_run": None,
         "out_files": 0,
@@ -58,6 +83,7 @@ def job_state(name):
     if os.path.isdir(attempts):
         rec["attempts_today"] = len([f for f in os.listdir(attempts)
                                      if f.startswith(today + ".attempt-")])
+    rec["spend_today"] = spend_today(st)
     last = os.path.join(st, "last")
     if os.path.isfile(last):
         rows = [r for r in open(last).read().splitlines() if r.strip()]

@@ -20,8 +20,25 @@ if [ "${NOOP_FAIL_STAGE:-0}" = 1 ]; then
   u_block --class human "stage 1 failed (fixture)"
 fi
 
-u_sh "stage 1: write artifact" stage_write
+# Stage 1 is the only stage that costs money. Its artifact is the notebook the
+# contract makes every paid stage consult: a run that finds hello.txt already
+# written has already paid for this unit, so a retry after a partial failure
+# re-checks the same gate without charging the 25c a second time. The charge is
+# booked with the artifact, never before it, so the ledger never claims money
+# for work that did not happen.
+if [ -s "$OUT/hello.txt" ]; then
+  u_say "stage 1: hello.txt already on disk, paid work skipped"
+else
+  u_sh "stage 1: write artifact" stage_write
+  u_spend 25 "stage 1"
+fi
 u_gate exists --file "$OUT/hello.txt"
+
+# The cap is checked after the charge because spent money cannot be unspent:
+# the run that crosses the ceiling is the run that stops and says so, and the
+# block (plus the day and attempt guards) keeps every later tick from spending
+# again. U_SPEND_CAP overrides the fixture's 100c daily budget.
+u_guard_spend "${U_SPEND_CAP:-100}"
 
 if [ "${NOOP_BLOCK:-0}" = 1 ]; then
   # NOOP_CLASS lets the fixture raise each class; the allowlisted repair for it

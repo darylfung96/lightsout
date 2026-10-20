@@ -155,6 +155,63 @@ u_guard_disk() {
   u_say "disk ok (${free} MB free)"
 }
 
+# --- spend ---------------------------------------------------------------
+# state/ledger.tsv is <iso>TAB<cents>TAB<label>TAB<unit>, one line per charge.
+# The label says what was paid for and the unit says what it bought, so a job's
+# money is attributable; only lines whose iso starts with today's date count
+# against today's budget, because a budget is a day.
+
+u_spent_today() {
+  local day
+  day=$(date +%F)
+  if [ ! -f "$STATE/ledger.tsv" ]; then printf '0'; return 0; fi
+  awk -F'\t' -v day="$day" '
+    $1 ~ "^" day && $2 ~ /^[0-9]+$/ { sum += $2 }
+    END { printf "%d", sum + 0 }' "$STATE/ledger.tsv"
+}
+
+# u_spend <cents> <label> — book one charge. A charge is a fact about money
+# already gone, so it is written when it is spent, never speculatively, and
+# never in plan mode.
+u_spend() {
+  local cents="${1:-}" label="${2:-}" unit="${UNIT:-unknown}"
+  [ -n "$cents" ] || u_die "u_spend: cents required"
+  case "$cents" in *[!0-9]*) u_die "u_spend: '$cents' is not whole cents" ;; esac
+  [ -n "$label" ] || u_die "u_spend: a label is required"
+  # one line per charge: a tab or newline in a field would corrupt the TSV
+  label="${label//$'\t'/ }"; label="${label//$'\n'/ }"
+  unit="${unit//$'\t'/ }"; unit="${unit//$'\n'/ }"
+  if [ "$DRY" = 1 ]; then
+    u_say "plan: would spend ${cents}c on $label (unit $unit)"
+    return 0
+  fi
+  mkdir -p "$STATE"
+  printf '%s\t%s\t%s\t%s\n' "$(date -Iseconds)" "$cents" "$label" "$unit" \
+    >> "$STATE/ledger.tsv"
+  u_say "spend: ${cents}c $label (unit $unit)"
+}
+
+# u_guard_spend <max_cents> — the day's ceiling for this job, read from the
+# ledger rather than from a variable, so a retry cannot forget what earlier
+# runs spent. A job calls it after a charge: money already gone cannot be
+# unspent, so the run that crosses the ceiling is the run that stops and names
+# the two numbers; the block is class human because a spent budget is not
+# something the next tick can fix.
+u_guard_spend() {
+  local max="${1:-}" total
+  [ -n "$max" ] || u_die "u_guard_spend: a cap in cents is required"
+  case "$max" in *[!0-9]*) u_die "u_guard_spend: '$max' is not whole cents" ;; esac
+  total=$(u_spent_today)
+  if [ "$total" -gt "$max" ]; then
+    u_block --class human "spend cap reached (${total} of ${max} cents today)"
+  fi
+  if [ "$DRY" = 1 ]; then
+    u_say "plan: spend ${total}c of ${max}c today"
+  else
+    u_say "spend ok (${total}c of ${max}c today)"
+  fi
+}
+
 u_done() {
   local unit="${1:-$UNIT}"
   if [ "$DRY" = 1 ]; then u_say "plan: would mark $unit done"; return 0; fi
