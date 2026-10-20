@@ -10,12 +10,34 @@ usage: job <verb> [name]
   list                 jobs that exist
   status [name]        state from files; --json for machines
   plan <name>          what would run now; touches nothing
-  run <name>           do the work, resuming from disk
+  run <name> [--class C] [--source S]
+                       do the work, resuming from disk; C defaults every block
+                       raised in this run (retryable|judgment|human)
   resume <name>        same as run
   unblock <name>       clear a blocked marker after a human looks
 
 exit: 0 done or held, 1 failed, 2 blocked
 TXT
+}
+
+# blocked_fields <file> — normalise state/blocked to iso<TAB>class<TAB>source<TAB>reason.
+# Four fields is the current format; a two-field file from an older run reads as
+# human with field 2 as the reason (docs/run-contract.md).
+blocked_fields() {
+  local raw iso cls src reason
+  raw=$(cat "$1" 2>/dev/null || true)
+  case "$raw" in
+    *$'\t'*$'\t'*)
+      IFS=$'\t' read -r iso cls src reason <<< "$raw"
+      case "${cls:-}" in retryable|judgment|human) ;; *) cls=human ;; esac
+      [ -n "${src:-}" ] || src=unknown
+      [ -n "${reason:-}" ] || reason="no reason recorded" ;;
+    *$'\t'*)
+      iso=${raw%%$'\t'*}; cls=human; src=unknown; reason=${raw#*$'\t'} ;;
+    *)
+      iso=${raw:-unknown}; cls=human; src=unknown; reason="no reason recorded" ;;
+  esac
+  printf '%s\t%s\t%s\t%s' "${iso:-unknown}" "$cls" "$src" "$reason"
 }
 
 job_env() {
@@ -43,10 +65,19 @@ record() { # record <verb> <rc>
 run_job() { # run_job <name> <verb> <dry>
   job_env "$1"
   local verb="$2" dry="$3" rc=0
+  U_BLOCK_CLASS="${U_BLOCK_CLASS:-human}"
+  U_BLOCK_SOURCE="${U_BLOCK_SOURCE:-unknown}"
+  export U_BLOCK_CLASS U_BLOCK_SOURCE
   if [ "$dry" = 0 ] && [ -f "$STATE/blocked" ]; then
-    local raw; raw=$(cat "$STATE/blocked")
-    printf 'blocked since %s: %s\n' "${raw%%$'\t'*}" "${raw#*$'\t'}"
-    printf '  fix the cause, then: bin/job unblock %s\n' "$JOB"
+    local fields iso cls src reason
+    fields=$(blocked_fields "$STATE/blocked")
+    IFS=$'\t' read -r iso cls src reason <<< "$fields"
+    printf 'blocked since %s [%s]: %s\n' "$iso" "$cls" "$reason"
+    if [ "$cls" = retryable ]; then
+      printf '  run the allowlisted repair: bin/job retry %s\n' "$JOB"
+    else
+      printf '  fix the cause, then: bin/job unblock %s\n' "$JOB"
+    fi
     exit 2
   fi
   DRY="$dry" bash "$JOB_DIR/job.sh" || rc=$?
@@ -70,7 +101,23 @@ case "$cmd" in
 
   run|resume)
     [ -n "${1:-}" ] || { usage; exit 64; }
-    run_job "$1" "$cmd" 0 ;;
+    name="$1"; shift
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --class)    [ "$#" -ge 2 ] || { echo "--class needs a value" >&2; exit 64; }
+                    U_BLOCK_CLASS="$2"; shift 2 ;;
+        --class=*)  U_BLOCK_CLASS="${1#*=}"; shift ;;
+        --source)   [ "$#" -ge 2 ] || { echo "--source needs a value" >&2; exit 64; }
+                    U_BLOCK_SOURCE="$2"; shift 2 ;;
+        --source=*) U_BLOCK_SOURCE="${1#*=}"; shift ;;
+        *) echo "unknown option: $1" >&2; usage; exit 64 ;;
+      esac
+    done
+    case "${U_BLOCK_CLASS:-human}" in
+      retryable|judgment|human) ;;
+      *) echo "--class must be retryable, judgment or human" >&2; exit 64 ;;
+    esac
+    run_job "$name" "$cmd" 0 ;;
 
   unblock)
     [ -n "${1:-}" ] || { usage; exit 64; }

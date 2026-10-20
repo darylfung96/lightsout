@@ -7,6 +7,23 @@ import re
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CLASSES = ("retryable", "judgment", "human")
+
+
+def blocked_fields(raw):
+    """state/blocked is <iso>TAB<class>TAB<source>TAB<reason>.
+
+    A two-field file from an older run reads as human with field 2 as the
+    reason; missing fields fall back to unknown / a placeholder.
+    """
+    parts = raw.split("\t", 3)
+    if len(parts) == 2:
+        return parts[0], "human", "unknown", parts[1]
+    iso_s = parts[0]
+    cls = parts[1] if len(parts) > 1 and parts[1] in CLASSES else "human"
+    src = parts[2] if len(parts) > 2 and parts[2] else "unknown"
+    reason = parts[3] if len(parts) > 3 and parts[3] else "no reason recorded"
+    return iso_s, cls, src, reason
 
 
 def iso(path, fallback=None):
@@ -27,6 +44,8 @@ def job_state(name):
         "has_spec": os.path.isfile(os.path.join(d, "spec.md")),
         "state": "never run",
         "detail": "",
+        "class": None,
+        "source": None,
         "since": None,
         "stage": "",
         "attempts_today": 0,
@@ -52,10 +71,9 @@ def job_state(name):
         rec["since"] = iso(os.path.join(done, today))
     blocked = os.path.join(st, "blocked")
     if os.path.isfile(blocked):
-        raw = open(blocked).read().strip().split("\t")
+        raw = open(blocked, errors="replace").read().strip()
+        rec["since"], rec["class"], rec["source"], rec["detail"] = blocked_fields(raw)
         rec["state"] = "blocked"
-        rec["since"] = raw[0] if raw else None
-        rec["detail"] = raw[1] if len(raw) > 1 else "no reason recorded"
     if os.path.isdir(os.path.join(st, "lock")):
         rec["state"] = "running"
     if os.path.isfile(log):

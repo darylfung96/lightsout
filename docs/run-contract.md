@@ -40,6 +40,10 @@ OUT       jobs/<name>/out
 LOG       jobs/<name>/logs/<YYYY-MM-DD>.log
 UNIT      the unit of work: a date by default, overridable per job
 DRY       1 for plan, 0 for run
+U_BLOCK_CLASS   default class for a block raised in this run (human unless
+                `bin/job run --class` says otherwise)
+U_BLOCK_SOURCE  default source for a block raised in this run (unknown unless
+                `bin/job run --source` says otherwise)
 ```
 
 ## State layout
@@ -49,9 +53,17 @@ state/
   lock/pid            one run at a time; stale pids are reclaimed
   attempts/<date>.attempt-N
   done/<unit>         this unit finished; the day guard reads it
-  blocked             <iso>TAB<reason> — one line, current reason only
+  blocked             <iso>TAB<class>TAB<source>TAB<reason> — one line, current reason only
   last                <iso>TAB<exit code>TAB<verb>
 ```
+
+The blocked line's class says what may be done about it: `retryable` (an
+allowlisted repair may fix it, so `job retry` is offered), `judgment` (a human
+must edit the artifact and re-run the gate), or `human` (credentials, disk, a
+decision). `source` names what raised the block and defaults to `unknown`. A
+two-field line written by an older run reads as `human` with field 2 as the
+reason. `bin/job run` and `resume` accept `--class C --source S` to set the
+default for every block raised during that run.
 
 `done/<unit>` is the notebook: a restarted job asks "is my output already on
 disk?" and skips. It is the single most important file in the directory, and

@@ -24,11 +24,35 @@ u_notify() {
 }
 
 # blocked = retrying will not fix it. One notification, then quiet persistence.
+# state/blocked is TSV <iso>TAB<class>TAB<source>TAB<reason>; the class decides
+# what may be done about it. Defaults: human, unknown (docs/run-contract.md).
 u_block() {
-  local reason="$*"
-  if [ "$DRY" = 1 ]; then u_say "plan: would block — $reason"; exit 0; fi
-  printf '%s\t%s\n' "$(date -Iseconds)" "$reason" > "$STATE/blocked"
-  u_say "BLOCKED: $reason"
+  local cls="${U_BLOCK_CLASS:-human}" src="${U_BLOCK_SOURCE:-unknown}" reason
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --class)    [ "$#" -ge 2 ] || u_die "u_block: --class needs a value"
+                  cls="$2"; shift 2 ;;
+      --class=*)  cls="${1#*=}"; shift ;;
+      --source)   [ "$#" -ge 2 ] || u_die "u_block: --source needs a value"
+                  src="$2"; shift 2 ;;
+      --source=*) src="${1#*=}"; shift ;;
+      --)         shift; break ;;
+      *)          break ;;
+    esac
+  done
+  case "$cls" in
+    retryable|judgment|human) ;;
+    *) u_die "u_block: class '$cls' is not retryable, judgment or human" ;;
+  esac
+  [ -n "$src" ] || src=unknown
+  # one line only: a tab or newline in a field would corrupt the TSV
+  cls="${cls//$'\t'/ }"; cls="${cls//$'\n'/ }"
+  src="${src//$'\t'/ }"; src="${src//$'\n'/ }"
+  reason="$*"
+  reason="${reason//$'\t'/ }"; reason="${reason//$'\n'/ }"
+  if [ "$DRY" = 1 ]; then u_say "plan: would block [$cls]: $reason"; exit 0; fi
+  printf '%s\t%s\t%s\t%s\n' "$(date -Iseconds)" "$cls" "$src" "$reason" > "$STATE/blocked"
+  u_say "BLOCKED [$cls]: $reason"
   u_notify "LightsOut: $JOB blocked" "$reason"
   exit 2
 }
