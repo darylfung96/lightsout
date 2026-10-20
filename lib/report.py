@@ -57,6 +57,46 @@ def spend_today(st):
     return total
 
 
+def expect_time(st):
+    """state/expect is one line, HH:MM local: the time a run is due.
+
+    Returns (minutes since midnight, "HH:MM") or None. A missing or malformed
+    file means the job states no expectation, and a job that is not expected is
+    never late; guessing a schedule from its history would invent the alarm.
+    """
+    try:
+        raw = open(os.path.join(st, "expect"), errors="replace").read()
+    except OSError:
+        return None
+    lines = raw.strip().splitlines()
+    line = lines[0].strip() if lines else ""
+    m = re.match(r"^([01][0-9]|2[0-3]):([0-5][0-9])$", line)
+    if not m:
+        return None
+    return int(m.group(1)) * 60 + int(m.group(2)), line
+
+
+def held_today(st):
+    """True when a run today ended rc 0 without writing done/<today>.
+
+    bin/job records every completed run in state/last as <iso>TAB<rc>TAB<verb>,
+    and only a run that reaches u_done writes today's done file. So rc 0 with no
+    done is a legitimate hold — the day guard after another unit, or the lock —
+    and must not read as a missed run. bin/job's check verb reads the file the
+    same way, so the dashboard and the alarm cannot disagree.
+    """
+    prefix = time.strftime("%Y-%m-%d") + "T"
+    try:
+        lines = open(os.path.join(st, "last"), errors="replace").read().splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[0].startswith(prefix) and parts[1] == "0":
+            return True
+    return False
+
+
 def job_state(name):
     d = os.path.join(REPO, "jobs", name)
     st = os.path.join(d, "state")
@@ -77,6 +117,8 @@ def job_state(name):
         "last_exit": None,
         "last_run": None,
         "out_files": 0,
+        "expect": None,
+        "stale": False,
     }
     today = time.strftime("%Y-%m-%d")
     attempts = os.path.join(st, "attempts")
@@ -92,15 +134,18 @@ def job_state(name):
             if len(parts) >= 3:
                 rec["last_run"], rec["last_exit"] = parts[0], int(parts[1])
     done = os.path.join(st, "done")
-    if os.path.isdir(done) and today in os.listdir(done):
+    done_today = os.path.isdir(done) and today in os.listdir(done)
+    if done_today:
         rec["state"] = "done today"
         rec["since"] = iso(os.path.join(done, today))
     blocked = os.path.join(st, "blocked")
-    if os.path.isfile(blocked):
+    blocked_now = os.path.isfile(blocked)
+    if blocked_now:
         raw = open(blocked, errors="replace").read().strip()
         rec["since"], rec["class"], rec["source"], rec["detail"] = blocked_fields(raw)
         rec["state"] = "blocked"
-    if os.path.isdir(os.path.join(st, "lock")):
+    locked = os.path.isdir(os.path.join(st, "lock"))
+    if locked:
         rec["state"] = "running"
     if os.path.isfile(log):
         hits = re.findall(r"\[(.+?)\] stage (\d+): (.*)", open(log, errors="replace").read())
@@ -110,6 +155,17 @@ def job_state(name):
             rec["last_run"] = rec["last_run"] or when
     if os.path.isdir(out):
         rec["out_files"] = sum(len(f) for _, _, f in os.walk(out))
+    # A run is missed when the clock has reached the expected time and nothing
+    # explains the gap: done, a lock, a block, or a run that ended held. A
+    # blocked job is not stale because "blocked" is the more specific stop; the
+    # check verb still exits 2 for one that missed its run, so a scheduler keeps
+    # seeing a non-zero state.
+    exp = expect_time(st)
+    if exp:
+        rec["expect"] = exp[1]
+        now = time.localtime()
+        rec["stale"] = bool(now.tm_hour * 60 + now.tm_min >= exp[0] and not done_today
+                            and not locked and not blocked_now and not held_today(st))
     return rec
 
 

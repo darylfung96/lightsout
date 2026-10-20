@@ -9,6 +9,7 @@ Every job in `jobs/` implements this interface and nothing invents its own.
 | `job plan <name>` | say what would run now; touch nothing | 0 |
 | `job run <name>` | do the work, resuming from disk | 0 / 1 / 2 |
 | `job status [name]` | describe state from files | 0 |
+| `job check [name]` | alarm when a run that was due never happened; one notification per job per day | 0 / 2 |
 | `job diagnose <name>` | explain the current stop from files; writes `state/diagnosis.md`, changes nothing else | 0 |
 | `job retry <name>` | run an allowlisted repair for a `retryable` block, then the job again so the same gate decides | 0 / 1 / 2 |
 | `job resume <name>` | identical to `run`; kept as a word for humans | 0 / 1 / 2 |
@@ -59,6 +60,8 @@ state/
   diagnosis.md        read-only report from `job diagnose`; the block is its input, not its output
   repairs/<date>.count repairs run today; `MAX_REPAIRS` (default 2) caps the loop
   last                <iso>TAB<exit code>TAB<verb>
+  expect              one line, HH:MM local: the time a run is due
+  alerts/<date>.stale the stale alarm for this job was raised today
 ```
 
 `lib/diagnose.py` reads the blocked line, the log up to the block, and `out/`,
@@ -93,6 +96,30 @@ again.
 `done/<unit>` is the notebook: a restarted job asks "is my output already on
 disk?" and skips. It is the single most important file in the directory, and
 every stage that costs money must consult it.
+
+## A run that never happened
+
+`state/expect` is one line, `HH:MM` local: the time a run is due. Whoever
+schedules the run writes it before the run, because a run cannot report that it
+failed to start. A job whose time has been reached with no `done/<today>`, no
+`lock`, no `blocked` marker and no run today that ended held has missed a run,
+and `status --json` reports `stale: true` for it.
+
+A hold is not a miss. Another run holding the `lock` is doing the work, and a
+run that exits `0` without writing `done` was deliberately held (the day guard
+or the lock); `bin/job` records every completed run in `state/last`, so rc `0`
+without `done` is the file evidence of that hold and it suppresses stale for the
+rest of the day. A job with no `expect` file is never late; inventing a schedule
+from its history would raise alarms nobody configured.
+
+`bin/job check` is the alarm. For every stale job it appends one notification
+through `u_notify` and writes `state/alerts/<date>.stale`, so a scheduler calling
+it every ten minutes raises one alarm a day instead of one per tick. A blocked
+job is not reported stale, because the block is the more specific stop and it
+notified when it was raised, but `check` exits `2` for a blocked job that missed
+its run: the scheduler keeps seeing a non-zero state without a notification every
+tick. `check` reads and notifies; it never runs a job, because an alarm that
+repaired would be a second runner.
 
 ## Log lines
 

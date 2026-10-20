@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# job — plan | run | status | diagnose | retry | resume | unblock | list.
+# job — plan | run | status | check | diagnose | retry | resume | unblock | list.
 # Contract: docs/run-contract.md
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -10,6 +10,8 @@ usage: job <verb> [name]
 
   list                 jobs that exist
   status [name]        state from files; --json for machines
+  check [name]         alarm when an expected run never happened: notifies once
+                       per job per day and exits 2 if a missed run is blocked
   plan <name>          what would run now; touches nothing
   diagnose <name>      read-only report on the current stop; writes
                        state/diagnosis.md and exits 0 even when blocked
@@ -106,6 +108,66 @@ record() { # record <verb> <rc>
   mv "$f.tmp" "$f"
 }
 
+# --- stale-run check -----------------------------------------------------
+# state/expect is one line, HH:MM local: the time a run is due. The alarm is
+# built from files, because a job that never runs writes no log. report.py:stale
+# makes the same test for status --json; keep the two in step.
+
+expect_time() { # expect_time <state dir> — the HH:MM, or empty
+  [ -f "$1/expect" ] || return 0
+  sed -n '1p' "$1/expect" 2>/dev/null | tr -d '[:space:]'
+}
+
+# held_today <state dir> <date> — true when a run today ended rc 0. Only a run
+# that reaches u_done writes done/<today>, so rc 0 with no done is a legitimate
+# hold (the day guard after another unit, or the lock), never a missed run.
+held_today() {
+  [ -f "$1/last" ] || return 1
+  awk -F'\t' -v day="$2" '
+    index($1, day "T") == 1 && $2 == "0" { held = 1 }
+    END { exit held ? 0 : 1 }' "$1/last"
+}
+
+# check_job <name> — 0 quiet, 2 when a missed run is also blocked. It never runs
+# the job: an alarm that repaired would be a second runner.
+check_job() {
+  local name="$1" st="$REPO/jobs/$1/state" expect now today marker
+  expect=$(expect_time "$st")
+  [ -n "$expect" ] || return 0
+  case "$expect" in
+    [01][0-9]:[0-5][0-9]|2[0-3]:[0-5][0-9]) ;;
+    *) printf 'check: %s: state/expect is not HH:MM: %s\n' "$name" "$expect" >&2
+       return 0 ;;
+  esac
+  now=$(date +%H:%M)
+  # zero-padded HH:MM compares as a clock
+  if [[ "$now" < "$expect" ]]; then return 0; fi
+  today=$(date +%F)
+  [ -f "$st/done/$today" ] && return 0
+  [ -d "$st/lock" ] && return 0
+  # A blocked job is not stale — the block is the more specific stop and it
+  # notified when it was raised — but a blocked job that missed its run keeps
+  # the scheduler's non-zero state, which is how a persistent stop stays visible
+  # without a notification every tick (docs/run-contract.md). This comes before
+  # the hold test: an earlier hold today must not mask a later block.
+  if [ -f "$st/blocked" ]; then
+    printf 'blocked: %s missed its %s run\n' "$name" "$expect"
+    return 2
+  fi
+  # A run that ended held did not miss; only a run that reaches u_done writes
+  # done, so rc 0 today is the file evidence of the hold.
+  held_today "$st" "$today" && return 0
+  # One alarm per job per day: the marker is the memory of having raised it.
+  marker="$st/alerts/$today.stale"
+  if [ ! -f "$marker" ]; then
+    mkdir -p "$st/alerts"
+    printf '%s\t%s\n' "$(date -Iseconds)" "$expect" > "$marker"
+    u_notify "LightsOut: $name stale" "no run by $expect today"
+  fi
+  printf 'stale: %s (expected %s)\n' "$name" "$expect"
+  return 0
+}
+
 run_job() { # run_job <name> <verb> <dry>
   job_env "$1"
   local verb="$2" dry="$3" rc=0
@@ -141,6 +203,26 @@ case "$cmd" in
 
   status)
     exec python3 "$REPO/lib/report.py" "$@" ;;
+
+  check)
+    want="${1:-}"
+    [ -z "$want" ] || [ -f "$REPO/jobs/$want/job.sh" ] || {
+      echo "no such job: $want" >&2; exit 64; }
+    mkdir -p "$REPO/logs"
+    U_ALERTS="$REPO/logs/alerts.log"
+    LOG="$REPO/logs/check.log"
+    export U_ALERTS LOG
+    . "$REPO/lib/guards.sh"   # u_notify: an alarm uses the same channels
+    rc=0
+    for d in "$REPO"/jobs/*/; do
+      [ -f "$d/job.sh" ] || continue
+      name=$(basename "$d")
+      [ -z "$want" ] || [ "$name" = "$want" ] || continue
+      r=0
+      check_job "$name" || r=$?
+      if [ "$r" = 2 ]; then rc=2; fi
+    done
+    exit "$rc" ;;
 
   plan)
     [ -n "${1:-}" ] || { usage; exit 64; }

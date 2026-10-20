@@ -20,6 +20,17 @@ import json,sys
 print([r for r in json.load(sys.stdin) if r["name"]=="noop"][0]["spend_today"])'
 }
 
+# stale_of_noop — what the dashboard says about the fixture's missed run.
+stale_of_noop() {
+  bin/job status --all --json | python3 -c '
+import json,sys
+print([r for r in json.load(sys.stdin) if r["name"]=="noop"][0]["stale"])'
+}
+
+# stale_alerts — stale alerts raised for the fixture so far. Counted from the
+# log the notifier appends to, so repeated test runs do not confuse the count.
+stale_alerts() { awk '/noop stale/' logs/alerts.log 2>/dev/null | wc -l | tr -d ' '; }
+
 # 1 — a fresh run finishes and writes its marker
 reset
 bin/job run noop >/dev/null 2>&1; check "fresh run exits 0" 0 "$?"
@@ -276,6 +287,87 @@ reset
 NOOP_BLOCK=1 NOOP_CLASS=retryable bin/job run noop >/dev/null 2>&1
 bin/job retry noop >/dev/null 2>&1; check "the retried run finishes" 0 "$?"
 check "a retry does not double-charge" 25 "$(spend_today)"
+
+# 14 — the run that never happened: stale is read from files, and a legitimate
+# hold is not a missed run (review focus 4)
+reset
+check "a job with no expectation is never stale" False "$(stale_of_noop)"
+
+reset
+mkdir -p jobs/noop/state
+printf '00:00\n' > jobs/noop/state/expect
+check "a job past its time with nothing done is stale" True "$(stale_of_noop)"
+bin/job run noop >/dev/null 2>&1
+check "a job done today is not stale" False "$(stale_of_noop)"
+
+# the day guard's hold is a legitimate reason not to have run again
+out=$(bin/job run noop 2>&1); rc=$?
+check "the second run is held" 0 "$rc"
+case "$out" in
+  *"held:"*) echo "ok   the day guard hold is reported" ;;
+  *) echo "FAIL day guard hold not reported: $out"; fails=$((fails + 1)) ;;
+esac
+check "a day-guard hold is not stale" False "$(stale_of_noop)"
+
+# the lock's hold: not stale while another run holds it, and a run that ended
+# held suppresses the alarm for the rest of the day
+reset
+mkdir -p jobs/noop/state/lock
+printf '00:00\n' > jobs/noop/state/expect
+printf '%s\n' "$$" > jobs/noop/state/lock/pid
+check "a held lock is not stale" False "$(stale_of_noop)"
+out=$(bin/job run noop 2>&1); rc=$?
+check "a run under another run's lock exits 0" 0 "$rc"
+case "$out" in
+  *"held: another run"*) echo "ok   the lock hold is reported" ;;
+  *) echo "FAIL lock hold not reported: $out"; fails=$((fails + 1)) ;;
+esac
+rm -rf jobs/noop/state/lock
+check "a run that ended held is not a missed run" False "$(stale_of_noop)"
+
+# 15 — job check: one alarm per job per day, and a missed block stays non-zero
+reset
+mkdir -p jobs/noop/state
+printf '00:00\n' > jobs/noop/state/expect
+before=$(stale_alerts)
+bin/job check >/dev/null 2>&1; check "check exits 0 for a stale job" 0 "$?"
+[ -f "jobs/noop/state/alerts/$(date +%F).stale" ]
+check "check writes one stale marker" 0 "$?"
+check "check notifies once" 1 "$(( $(stale_alerts) - before ))"
+bin/job check >/dev/null 2>&1
+check "a second check does not notify again" 1 "$(( $(stale_alerts) - before ))"
+[ -f "jobs/noop/state/done/$(date +%F)" ]; check "check never runs the job" 1 "$?"
+[ -f jobs/noop/out/hello.txt ]; check "check writes no artifact" 1 "$?"
+
+reset
+mkdir -p jobs/noop/state
+printf '00:00\n' > jobs/noop/state/expect
+bin/job run noop >/dev/null 2>&1
+before=$(stale_alerts)
+bin/job check >/dev/null 2>&1; check "check exits 0 when the job is done" 0 "$?"
+[ -f "jobs/noop/state/alerts/$(date +%F).stale" ]
+check "a done job raises no stale marker" 1 "$?"
+check "a done job raises no stale alert" "$before" "$(stale_alerts)"
+
+reset
+mkdir -p jobs/noop/state
+printf '00:00\n' > jobs/noop/state/expect
+NOOP_BLOCK=1 bin/job run noop >/dev/null 2>&1
+before=$(stale_alerts)
+bin/job check >/dev/null 2>&1; check "a missed run that is blocked exits 2" 2 "$?"
+check "a blocked job does not raise the stale alert" "$before" "$(stale_alerts)"
+[ -f "jobs/noop/state/alerts/$(date +%F).stale" ]
+check "a blocked job writes no stale marker" 1 "$?"
+
+# an earlier hold today must not mask a later block: the block needs a human
+reset
+mkdir -p jobs/noop/state/lock
+printf '00:00\n' > jobs/noop/state/expect
+printf '%s\n' "$$" > jobs/noop/state/lock/pid
+bin/job run noop >/dev/null 2>&1
+rm -rf jobs/noop/state/lock
+NOOP_BLOCK=1 bin/job run noop >/dev/null 2>&1
+bin/job check >/dev/null 2>&1; check "a hold does not mask a later block" 2 "$?"
 
 reset
 echo
