@@ -145,6 +145,18 @@ u_guard_lock
 if [ -d "$VIDEO_REPO/logs/daily-build.lock" ]; then
   u_held "the driver's build lock exists ($VIDEO_REPO/logs/daily-build.lock)"
 fi
+# The driver's rule is one build per day, measured from the newest master, and a
+# tick that cannot build must spend no attempt: ask that rule here, before the
+# attempt file exists (docs/run-contract.md, "guards").
+if [ "$DRY" = 0 ]; then
+  newest_master=$(ls -t "$VIDEO_REPO"/outbox/[0-9][0-9][0-9]-master.mp4 2>/dev/null | head -1 || true)
+  if [ -n "$newest_master" ]; then
+    master_age_h=$(( ($(date +%s) - $(stat -f %m "$newest_master")) / 3600 ))
+    if [ "$(date -r "$newest_master" +%F)" = "$(date +%F)" ] || [ "$master_age_h" -lt 20 ]; then
+      u_held "a master was built ${master_age_h}h ago (${newest_master##*/}) — one per day"
+    fi
+  fi
+fi
 u_guard_attempts
 u_guard_disk 2000
 
@@ -231,6 +243,14 @@ set -e
 if [ "$build_rc" -ne 0 ]; then
   u_block --class judgment --source stage:2-8 \
     "daily-build.sh $ep failed (rc $build_rc); see $VIDEO_REPO/logs/daily-build-$(date +%F).log"
+fi
+
+# A driver that exits 0 without a master decided not to build (its own day
+# guard, or an episode it judged already done). That is a hold, not a verdict:
+# blocks are permanent until a human clears them, and a false one would stop
+# every later run.
+if [ ! -f "$master" ]; then
+  u_held "the driver exited 0 without $ep's master — it decided not to build"
 fi
 
 # --- the master is the deliverable: judge what the driver produced ---------

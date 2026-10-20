@@ -962,6 +962,10 @@ case "${1:-}" in
     printf '[fixture] preflight OK (ep %s, beds 3)\n' "${FAKE_NEXT_EP:-042}"
     exit 0 ;;
   *)
+    if [ "${FAKE_DRIVER_HOLD:-0}" = 1 ]; then
+      printf '[fixture] a master was built 3h ago - one per day, skipping\n'
+      exit 0
+    fi
     : > "$here/../outbox/$1-master.mp4"
     printf '[fixture] built %s\n' "$1"
     exit 0 ;;
@@ -1032,6 +1036,7 @@ esac
 video_agent_log=$(mktemp "${TMPDIR:-/tmp}/lightsout-video-agent.XXXXXX")
 rm -rf jobs/everyday-laws/state jobs/everyday-laws/out jobs/everyday-laws/logs \
   "$video_repo/calls.log"
+rm -f "$video_repo"/outbox/*-master.mp4
 PATH="$video_repo/bin:$PATH" VIDEO_REPO="$video_repo" U_RUNNER=fake \
   FAKE_AGENT_LOG="$video_agent_log" \
   FAKE_AGENT_OUT="$video_repo/episodes/042/lesson-raw.md" \
@@ -1054,6 +1059,7 @@ check "a passing master marks the day done" 0 "$?"
 # a master the resolution gate rejects blocks the job and does not mark the day
 rm -rf jobs/everyday-laws/state jobs/everyday-laws/out jobs/everyday-laws/logs \
   "$video_repo/calls.log"
+rm -f "$video_repo/outbox/042-master.mp4"
 PATH="$video_repo/bin:$PATH" VIDEO_REPO="$video_repo" U_RUNNER=fake \
   FAKE_AGENT_LOG="$video_agent_log" \
   FAKE_AGENT_OUT="$video_repo/episodes/042/lesson-raw.md" FAKE_VIDEO_RES=720x1280 \
@@ -1066,6 +1072,37 @@ grep -q "resolution" jobs/everyday-laws/state/blocked 2>/dev/null
 check "the block names the resolution gate" 0 "$?"
 [ -f "jobs/everyday-laws/state/done/$(date +%F)" ]
 check "a blocked master does not mark the day done" 1 "$?"
+
+# a driver that decides not to build must hold, never block: a block would
+# refuse every later run until a human cleared it
+rm -rf jobs/everyday-laws/state jobs/everyday-laws/out jobs/everyday-laws/logs \
+  "$video_repo/calls.log"
+rm -f "$video_repo"/outbox/042-master.mp4
+PATH="$video_repo/bin:$PATH" VIDEO_REPO="$video_repo" U_RUNNER=fake \
+  FAKE_AGENT_LOG="$video_agent_log" \
+  FAKE_AGENT_OUT="$video_repo/episodes/042/lesson-raw.md" FAKE_DRIVER_HOLD=1 \
+  U_MEMORY=1 U_PI_MEMORY="$PWD/tests/fake-pi-memory" \
+  bin/job run everyday-laws >/dev/null 2>&1
+check "a driver hold exits 0" 0 "$?"
+[ -f jobs/everyday-laws/state/blocked ]
+check "a driver hold leaves no block" 1 "$?"
+[ -f "jobs/everyday-laws/state/done/$(date +%F)" ]
+check "a driver hold does not mark the day done" 1 "$?"
+
+# and a master already on disk today is asked before a single attempt is spent
+rm -rf jobs/everyday-laws/state jobs/everyday-laws/out jobs/everyday-laws/logs \
+  "$video_repo/calls.log"
+: > "$video_repo/outbox/041-master.mp4"
+PATH="$video_repo/bin:$PATH" VIDEO_REPO="$video_repo" U_RUNNER=fake \
+  FAKE_AGENT_LOG="$video_agent_log" \
+  FAKE_AGENT_OUT="$video_repo/episodes/042/lesson-raw.md" \
+  U_MEMORY=1 U_PI_MEMORY="$PWD/tests/fake-pi-memory" \
+  bin/job run everyday-laws >/dev/null 2>&1
+check "a same-day master holds" 0 "$?"
+check "the hold spends no attempt" 0 \
+  "$(find jobs/everyday-laws/state/attempts -type f 2>/dev/null | wc -l | tr -d ' ')"
+[ -f "$video_repo/calls.log" ]
+check "the hold never starts the driver" 1 "$?"
 
 rm -rf "$video_repo" "$video_agent_log" jobs/everyday-laws/state \
   jobs/everyday-laws/out jobs/everyday-laws/logs
