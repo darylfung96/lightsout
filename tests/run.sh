@@ -6,6 +6,15 @@ cd "$REPO"
 export U_NOTIFY=0 U_MEMORY=0
 fails=0
 
+# The suite drives fixed paths under jobs/, so two concurrent runs trample each
+# other and report phantom failures. Hold a lock instead.
+tests_lock="${TMPDIR:-/tmp}/lightsout-tests.lock"
+if ! mkdir "$tests_lock" 2>/dev/null; then
+  echo "another tests/run.sh holds $tests_lock — refusing to run"
+  exit 75
+fi
+trap 'rmdir "$tests_lock" 2>/dev/null || true' EXIT
+
 check() { # check <label> <want> <got>
   if [ "$2" = "$3" ]; then printf 'ok   %s\n' "$1"
   else printf 'FAIL %s (want %s, got %s)\n' "$1" "$2" "$3"; fails=$((fails + 1)); fi
