@@ -196,17 +196,42 @@ grep -q "touch-missing" jobs/noop/state/diagnosis.md; check "diagnose lists the 
 
 reset
 NOOP_BLOCK=1 NOOP_CLASS=retryable bin/job run noop >/dev/null 2>&1
-NOOP_BLOCK=1 NOOP_CLASS=retryable MAX_ATTEMPTS=99 MAX_REPAIRS=2 bin/job retry noop >/dev/null 2>&1
+# Both caps are lifted so this loop tests MAX_REPAIRS and nothing else: the
+# third run would otherwise be the stage cap (Task 4), not the repair cap.
+NOOP_BLOCK=1 NOOP_CLASS=retryable MAX_ATTEMPTS=99 MAX_STAGE_ATTEMPTS=99 MAX_REPAIRS=2 bin/job retry noop >/dev/null 2>&1
 check "first retry under the cap runs" 2 "$?"
-NOOP_BLOCK=1 NOOP_CLASS=retryable MAX_ATTEMPTS=99 MAX_REPAIRS=2 bin/job retry noop >/dev/null 2>&1
+NOOP_BLOCK=1 NOOP_CLASS=retryable MAX_ATTEMPTS=99 MAX_STAGE_ATTEMPTS=99 MAX_REPAIRS=2 bin/job retry noop >/dev/null 2>&1
 check "second retry under the cap runs" 2 "$?"
-out=$(NOOP_BLOCK=1 NOOP_CLASS=retryable MAX_ATTEMPTS=99 MAX_REPAIRS=2 bin/job retry noop 2>&1); rc=$?
+out=$(NOOP_BLOCK=1 NOOP_CLASS=retryable MAX_ATTEMPTS=99 MAX_STAGE_ATTEMPTS=99 MAX_REPAIRS=2 bin/job retry noop 2>&1); rc=$?
 check "repair cap blocks the third retry" 2 "$rc"
 case "$out" in
   *"repair cap"*) echo "ok   repair cap is reported" ;;
   *) echo "FAIL repair cap not reported: $out"; fails=$((fails + 1)) ;;
 esac
 check "two repairs recorded today" 2 "$(cat "jobs/noop/state/repairs/$(date +%F).count" 2>/dev/null)"
+
+# 12 — per-stage attempt caps: one stage cannot burn the whole job's budget
+reset
+for i in 1 2 3; do NOOP_FAIL_STAGE=1 bin/job run noop >/dev/null 2>&1; done
+bin/job status --all --json | python3 -c '
+import json,sys
+r=[x for x in json.load(sys.stdin) if x["name"]=="noop"][0]
+assert r["state"]=="blocked" and "stage" in r["detail"], r'
+check "a failing stage blocks with a stage detail" 0 "$?"
+
+reset
+for i in 1 2 3; do
+  NOOP_FAIL_STAGE=1 MAX_ATTEMPTS=99 bin/job run noop >/dev/null 2>&1
+  [ "$i" = 3 ] || bin/job unblock noop >/dev/null 2>&1
+done
+row=$(bin/job status --all --json | python3 -c '
+import json,sys
+r=[x for x in json.load(sys.stdin) if x["name"]=="noop"][0]
+print("%s|%s" % (r["class"], r["detail"]))')
+check "third stage attempt is a human block" \
+  "human|stage 1 attempt cap reached (2 of 2 today)" "$row"
+check "only the stage's own attempts are counted" 2 \
+  "$(find jobs/noop/state/attempts -maxdepth 1 -name "$(date +%F).1.attempt-*" | wc -l | tr -d ' ')"
 
 reset
 echo

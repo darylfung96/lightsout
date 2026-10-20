@@ -12,6 +12,14 @@ u_guard_lock
 u_guard_attempts
 u_guard_disk 100
 
+# Stage 1 — the per-stage cap is checked before the work, so a stage that keeps
+# failing cannot spend the whole job's day. NOOP_FAIL_STAGE makes it fail, which
+# is the fixture's way of proving the cap: the third attempt is a human block.
+u_guard_stage 1
+if [ "${NOOP_FAIL_STAGE:-0}" = 1 ]; then
+  u_block --class human "stage 1 failed (fixture)"
+fi
+
 u_sh "stage 1: write artifact" stage_write
 u_gate exists --file "$OUT/hello.txt"
 

@@ -94,6 +94,42 @@ u_guard_attempts() {
   u_say "attempt $((n + 1)) of $max"
 }
 
+# u_stage_attempts <id> — attempts this stage has taken today. The day cap's
+# files are <date>.attempt-N, so a stage's <date>.<id>.attempt-N never count
+# against the job as a whole and vice versa.
+u_stage_attempts() {
+  local id="$1"
+  find "$STATE/attempts" -maxdepth 1 -name "$(date +%F).$id.attempt-*" 2>/dev/null \
+    | wc -l | tr -d ' '
+}
+
+# u_guard_stage <id> — the per-stage attempt cap. The day cap says the job has
+# spent its budget; this says which stage is spending it, so a stage that keeps
+# failing stops the job with a reason a human can act on. Files are
+# state/attempts/<date>.<id>.attempt-N and the block is class human: a stage
+# that failed MAX_STAGE_ATTEMPTS times today is a code or input problem, not
+# something the next tick can fix.
+u_guard_stage() {
+  local id="${1:-}" max="${MAX_STAGE_ATTEMPTS:-2}" n
+  [ -n "$id" ] || u_die "u_guard_stage: stage id required"
+  case "$id" in
+    *[!A-Za-z0-9._-]*) u_die "u_guard_stage: stage id '$id' must be letters, digits, dot, dash or underscore" ;;
+  esac
+  case "$max" in
+    ''|*[!0-9]*) u_die "MAX_STAGE_ATTEMPTS must be a whole number" ;;
+  esac
+  n=$(u_stage_attempts "$id")
+  if [ "$n" -ge "$max" ]; then
+    u_block --class human "stage $id attempt cap reached ($n of $max today)"
+  fi
+  if [ "$DRY" = 1 ]; then
+    u_say "plan: would take stage $id attempt $((n + 1)) of $max"
+    return 0
+  fi
+  : > "$STATE/attempts/$(date +%F).$id.attempt-$((n + 1))"
+  u_say "stage $id attempt $((n + 1)) of $max"
+}
+
 u_guard_lock() {
   local pid=""
   if [ -d "$STATE/lock" ]; then
