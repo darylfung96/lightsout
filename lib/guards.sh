@@ -16,6 +16,10 @@ u_die()   { u_say "FATAL: $*"; exit 1; }
 # the same places (docs/run-contract.md).
 . "$REPO/lib/notify.sh"
 
+# u_resource lives in lib/locks.sh: the lock file, its stale rules and the
+# release-on-EXIT trap are one file, so every job waits the same way.
+. "$REPO/lib/locks.sh"
+
 # blocked = retrying will not fix it. One notification, then quiet persistence.
 # state/blocked is TSV <iso>TAB<class>TAB<source>TAB<reason>; the class decides
 # what may be done about it. Defaults: human, unknown (docs/run-contract.md).

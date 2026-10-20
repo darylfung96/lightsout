@@ -9,6 +9,11 @@ stage_write() { mkdir -p "$OUT"; printf 'hello %s\n' "$(date -Iseconds)" > "$OUT
 
 u_guard_day
 u_guard_lock
+# The fixture shares one cross-job resource named fixture. It is taken before
+# the attempt is counted, because a busy resource is a hold and a hold is not a
+# try: otherwise three busy ticks would read as the attempt cap and block a job
+# that never ran. Tests hold the lock from another shell (tests/run.sh, Task 9).
+u_resource fixture
 u_guard_attempts
 u_guard_disk 100
 

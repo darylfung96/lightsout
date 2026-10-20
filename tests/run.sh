@@ -506,6 +506,71 @@ check "the page names the last 5 runs" 0 "$?"
 check "the page renders five recent runs" 5 \
   "$(grep -o "class='run'" /tmp/lightsout-history.html | wc -l | tr -d ' ')"
 
+# 18 — resource locks: a named resource lets one run through at a time; a busy
+# resource is a hold (exit 0, no work), and a lock left by a dead or expired
+# holder is reclaimed instead of deadlocking the next run (Task 9)
+reset
+mkdir -p jobs/noop/state
+printf '00:00\n' > jobs/noop/state/expect
+# hold the resource from a background shell, then run: the job must hold, not crash
+( mkdir -p jobs/noop/state/resources; printf '%s\t%s\n' $$ $(( $(date +%s) + 60 )) > jobs/noop/state/resources/fixture.lock; sleep 3 ) &
+sleep 1
+lock_before=$(cat jobs/noop/state/resources/fixture.lock)
+out=$(bin/job run noop 2>&1); rc=$?
+check "busy resource holds" 0 "$rc"
+[ -f "jobs/noop/state/done/$(date +%F)" ]; check "a resource hold does no work" 1 "$?"
+check "a held run leaves the other run's lock alone" "$lock_before" \
+  "$(cat jobs/noop/state/resources/fixture.lock 2>/dev/null)"
+case "$out" in
+  *"held: resource fixture"*) echo "ok   the resource hold is reported" ;;
+  *) echo "FAIL resource hold not reported: $out"; fails=$((fails + 1)) ;;
+esac
+check "a resource hold is not a missed run" False "$(stale_of_noop)"
+wait
+
+reset
+( mkdir -p jobs/noop/state/resources; printf '999999\t%s\n' $(( $(date +%s) - 60 )) > jobs/noop/state/resources/fixture.lock )
+out=$(bin/job run noop 2>&1); rc=$?
+check "expired resource reclaimed" 0 "$rc"
+[ -f "jobs/noop/state/done/$(date +%F)" ]; check "a reclaimed resource runs the job" 0 "$?"
+[ -f jobs/noop/state/resources/fixture.lock ]; check "a released resource leaves no lock" 1 "$?"
+case "$out" in
+  *"reclaimed"*) echo "ok   the stale lock is named" ;;
+  *) echo "FAIL stale lock not reported: $out"; fails=$((fails + 1)) ;;
+esac
+
+# review focus 5: the lock a SIGKILLed holder leaves names a dead pid and an
+# unexpired deadline, so the pid is what must reclaim it
+reset
+mkdir -p jobs/noop/state/resources
+bash -c 'printf "%s\t%s\n" "$$" "$(( $(date +%s) + 3600 ))" > "$1"; exec sleep 30' _ \
+  jobs/noop/state/resources/fixture.lock &
+holder=$!
+sleep 1
+kill -9 "$holder" 2>/dev/null || true
+wait "$holder" 2>/dev/null || true
+out=$(bin/job run noop 2>&1); rc=$?
+check "a SIGKILLed holder is reclaimed" 0 "$rc"
+[ -f "jobs/noop/state/done/$(date +%F)" ]; check "a lock left by SIGKILL does not deadlock" 0 "$?"
+[ -f jobs/noop/state/resources/fixture.lock ]; check "the dead holder's lock is removed" 1 "$?"
+
+# U_RESOURCE_WAIT waits for a live holder, then takes the resource and runs
+reset
+( mkdir -p jobs/noop/state/resources; printf '%s\t%s\n' $$ $(( $(date +%s) + 60 )) > jobs/noop/state/resources/fixture.lock; sleep 2; rm -f jobs/noop/state/resources/fixture.lock ) &
+sleep 1
+out=$(U_RESOURCE_WAIT=10 bin/job run noop 2>&1); rc=$?
+check "a waiting run takes the resource when it frees" 0 "$rc"
+[ -f "jobs/noop/state/done/$(date +%F)" ]; check "a waited-for resource runs the job" 0 "$?"
+case "$out" in
+  *"resource fixture acquired"*) echo "ok   the waiting run logs the acquisition" ;;
+  *) echo "FAIL acquisition not logged: $out"; fails=$((fails + 1)) ;;
+esac
+wait
+
+reset
+bin/job plan noop >/dev/null 2>&1
+[ -d jobs/noop/state/resources ]; check "plan takes no resource" 1 "$?"
+
 reset
 echo
 if [ "$fails" -eq 0 ]; then echo "all checks passed"; else echo "$fails check(s) failed"; exit 1; fi
