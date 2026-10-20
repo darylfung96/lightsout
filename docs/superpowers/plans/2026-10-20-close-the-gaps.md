@@ -62,7 +62,7 @@
 - Consumes: nothing new.
 - Produces: `state/blocked` is TSV `<iso>\t<class>\t<source>\t<reason>`, `class` ∈ `retryable|judgment|human`, defaults `human`, `source` defaults `unknown`. Two-field files from an older run are read as `human` with `reason` = field 2. `u_block [--class C] [--source S] <reason>`.
 
-- [ ] **Step 1: Write the failing test** in `tests/run.sh`, after the existing blocked scenario:
+- [x] **Step 1: Write the failing test** in `tests/run.sh`, after the existing blocked scenario:
 
 ```bash
 reset
@@ -71,19 +71,19 @@ row=$(bin/job status --all --json | python3 -c 'import json,sys; print([r for r 
 check "block class is recorded" retryable "$row"
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `./tests/run.sh`
 Expected: FAIL — `class` is `None` / KeyError.
 
-- [ ] **Step 3: Implement** — `u_block` parses optional `--class`/`--source`, writes four fields; `report.py` splits four fields and exposes `class` and `source`; `bin/job` prints `blocked since <iso> [<class>]: <reason>` and names `bin/job retry` only for `retryable`.
+- [x] **Step 3: Implement** — `u_block` parses optional `--class`/`--source`, writes four fields; `report.py` splits four fields and exposes `class` and `source`; `bin/job` prints `blocked since <iso> [<class>]: <reason>` and names `bin/job retry` only for `retryable`.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `./tests/run.sh`
 Expected: all checks pass, including the new one.
 
-- [ ] **Step 5: Commit** `git commit -m "feat: classify blocked failures"`
+- [x] **Step 5: Commit** `git commit -m "feat: classify blocked failures"`
 
 ---
 
@@ -99,7 +99,7 @@ Expected: all checks pass, including the new one.
 - Consumes: `state/blocked` (Task 1), `$LOG`, `$STATE`, `$OUT`.
 - Produces: `state/diagnosis.md`, written by `diagnose.py <job-dir>`; `bin/job diagnose <name>` prints it and exits `0` even when blocked. `diagnose.py` never writes anything except `state/diagnosis.md`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```bash
 reset
@@ -111,13 +111,13 @@ check "diagnose leaves the block untouched" "$before" "$after"
 [ -s jobs/noop/state/diagnosis.md ]; check "diagnosis written" 0 "$?"
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — `bin/job diagnose` is an unknown verb.
+- [x] **Step 2: Run it and watch it fail** — `bin/job diagnose` is an unknown verb.
 
-- [ ] **Step 3: Implement** — `diagnose.py` reads the blocked line, the last 40 log lines before the block, the last failing `FAIL ` line, and lists `$OUT` with sizes; writes a markdown report with sections Cause candidates / Evidence / Next commands, chosen from the class: retryable → the allowlist from Task 3; judgment → "re-run the gate after editing the artifact"; human → "check credentials/disk, then unblock".
+- [x] **Step 3: Implement** — `diagnose.py` reads the blocked line, the last 40 log lines before the block, the last failing `FAIL ` line, and lists `$OUT` with sizes; writes a markdown report with sections Cause candidates / Evidence / Next commands, chosen from the class: retryable → the allowlist from Task 3; judgment → "re-run the gate after editing the artifact"; human → "check credentials/disk, then unblock".
 
-- [ ] **Step 4: Run the tests** — `./tests/run.sh` passes.
+- [x] **Step 4: Run the tests** — `./tests/run.sh` passes.
 
-- [ ] **Step 5: Commit** `git commit -m "feat: add read-only diagnose verb"`
+- [x] **Step 5: Commit** `git commit -m "feat: add read-only diagnose verb"`
 
 ---
 
@@ -133,7 +133,7 @@ check "diagnose leaves the block untouched" "$before" "$after"
 - Consumes: block class (Task 1).
 - Produces: `bin/job retry <name>`; repairs registered as `repair_<name>()` in `lib/repairs.sh`; `state/repairs/<date>.count` capped by `MAX_REPAIRS` (default 2). Exits `2` and touches nothing when the class is not `retryable` or the repair is unknown.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```bash
 reset
@@ -144,13 +144,13 @@ NOOP_BLOCK=1 NOOP_CLASS=human bin/job run noop >/dev/null 2>&1
 bin/job retry noop >/dev/null 2>&1; check "retry refuses a human block" 2 "$?"
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — `retry` is an unknown verb.
+- [x] **Step 2: Run it and watch it fail** — `retry` is an unknown verb.
 
-- [ ] **Step 3: Implement** — `retry` reads the class; if not `retryable`, print the diagnosis path and exit `2`; else run the named repair from `NOOP_REPAIR` (default `touch-missing`), bump the repair count, then call `run_job` unchanged so the gate still decides.
+- [x] **Step 3: Implement** — `retry` reads the class; if not `retryable`, print the diagnosis path and exit `2`; else run the named repair from `NOOP_REPAIR` (default `touch-missing`), bump the repair count, then call `run_job` unchanged so the gate still decides.
 
-- [ ] **Step 4: Run the tests** — passes.
+- [x] **Step 4: Run the tests** — passes.
 
-- [ ] **Step 5: Commit** `git commit -m "feat: allowlisted retry for retryable failures"`
+- [x] **Step 5: Commit** `git commit -m "feat: allowlisted retry for retryable failures"`
 
 ---
 
@@ -165,7 +165,7 @@ bin/job retry noop >/dev/null 2>&1; check "retry refuses a human block" 2 "$?"
 - Consumes: `$STATE/attempts`.
 - Produces: `u_guard_stage <id>`; files `state/attempts/<date>.<id>.attempt-N`; cap `MAX_STAGE_ATTEMPTS` (default 2); blocks with class `human` on the third.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```bash
 reset
@@ -176,13 +176,13 @@ r=[x for x in json.load(sys.stdin) if x["name"]=="noop"][0]
 assert r["state"]=="blocked" and "stage" in r["detail"], r'
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — the third run is stopped by the day-level cap, not the stage cap, so the detail is wrong.
+- [x] **Step 2: Run it and watch it fail** — the third run is stopped by the day-level cap, not the stage cap, so the detail is wrong.
 
-- [ ] **Step 3: Implement** — `u_guard_stage` counts only its own stage files; `noop` calls it at the top of stage 1 and honours `NOOP_FAIL_STAGE=1` by calling `u_block --class human "stage 1 failed (fixture)"` before writing the artifact.
+- [x] **Step 3: Implement** — `u_guard_stage` counts only its own stage files; `noop` calls it at the top of stage 1 and honours `NOOP_FAIL_STAGE=1` by calling `u_block --class human "stage 1 failed (fixture)"` before writing the artifact.
 
-- [ ] **Step 4: Run the tests** — passes.
+- [x] **Step 4: Run the tests** — passes.
 
-- [ ] **Step 5: Commit** `git commit -m "feat: per-stage attempt caps"`
+- [x] **Step 5: Commit** `git commit -m "feat: per-stage attempt caps"`
 
 ---
 
@@ -198,7 +198,7 @@ assert r["state"]=="blocked" and "stage" in r["detail"], r'
 - Consumes: nothing.
 - Produces: `state/ledger.tsv` lines `<iso>\t<cents>\t<label>\t<unit>`; `u_spend <cents> <label>`; `u_guard_spend <max_cents>` reads only today's lines; `status --json` gains `spend_today`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```bash
 reset
@@ -211,13 +211,13 @@ reset
 U_SPEND_CAP=10 bin/job run noop >/dev/null 2>&1; check "spend cap blocks" 2 "$?"
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — `spend_today` is missing.
+- [x] **Step 2: Run it and watch it fail** — `spend_today` is missing.
 
-- [ ] **Step 3: Implement** — `u_spend` appends with `date +%F`; `u_guard_spend` sums today's column 2 with awk; `report.py` sums the same file; the fixture spends 25 cents once per unit, guarded by `state/done`, so a retry does not double-count.
+- [x] **Step 3: Implement** — `u_spend` appends with `date +%F`; `u_guard_spend` sums today's column 2 with awk; `report.py` sums the same file; the fixture spends 25 cents once per unit, guarded by `state/done`, so a retry does not double-count.
 
-- [ ] **Step 4: Run the tests** — passes, including the no-double-count case.
+- [x] **Step 4: Run the tests** — passes, including the no-double-count case.
 
-- [ ] **Step 5: Commit** `git commit -m "feat: spend ledger and cap"`
+- [x] **Step 5: Commit** `git commit -m "feat: spend ledger and cap"`
 
 ---
 
@@ -233,7 +233,7 @@ U_SPEND_CAP=10 bin/job run noop >/dev/null 2>&1; check "spend cap blocks" 2 "$?"
 - Consumes: `state/last`, `state/done`, `state/lock`.
 - Produces: `state/expect` containing `HH:MM`; `job_status.stale` is true when now is past `HH:MM`, no `done/<today>`, no lock, and no blocked marker; `bin/job check` notifies once per job per day (`state/alerts/<date>.stale`) and exits `0` unless a job is both stale and blocked.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```bash
 reset
@@ -249,13 +249,13 @@ r=[x for x in json.load(sys.stdin) if x["name"]=="noop"][0]
 assert r["stale"] is False, r'
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — no `stale` key.
+- [x] **Step 2: Run it and watch it fail** — no `stale` key.
 
-- [ ] **Step 3: Implement** — compute from files only; a held run writes `state/last` with rc 0 and sets `state/held`, which suppresses stale for the rest of that day.
+- [x] **Step 3: Implement** — compute from files only; a held run writes `state/last` with rc 0 and sets `state/held`, which suppresses stale for the rest of that day.
 
-- [ ] **Step 4: Run the tests** — passes.
+- [x] **Step 4: Run the tests** — passes.
 
-- [ ] **Step 5: Commit** `git commit -m "feat: detect a run that never happened"`
+- [x] **Step 5: Commit** `git commit -m "feat: detect a run that never happened"`
 
 ---
 
@@ -270,7 +270,7 @@ assert r["stale"] is False, r'
 - Consumes: `U_NOTIFY` (0/1), `U_ALERTS`.
 - Produces: `u_notify <title> <body>` tries each configured channel (`U_NOTIFY_CMD`, `U_NOTIFY_WEBHOOK`, `osascript`) with a 5-second timeout, always appends to `$U_ALERTS`, and never fails the job.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```bash
 reset
@@ -278,13 +278,13 @@ NOOP_BLOCK=1 U_NOTIFY_CMD='printf "%s|%s\n" >> /tmp/lightsout-notify' bin/job ru
 grep -q "noop blocked" /tmp/lightsout-notify; check "notify cmd fired" 0 "$?"
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — `U_NOTIFY_CMD` is ignored.
+- [x] **Step 2: Run it and watch it fail** — `U_NOTIFY_CMD` is ignored.
 
-- [ ] **Step 3: Implement** — channel loop; `command -v` before use; `timeout` unavailable on macOS, so use `perl -e 'alarm 5; exec @ARGV'` or background-plus-kill.
+- [x] **Step 3: Implement** — channel loop; `command -v` before use; `timeout` unavailable on macOS, so use `perl -e 'alarm 5; exec @ARGV'` or background-plus-kill.
 
-- [ ] **Step 4: Run the tests** — passes.
+- [x] **Step 4: Run the tests** — passes.
 
-- [ ] **Step 5: Commit** `git commit -m "feat: pluggable notification channels"`
+- [x] **Step 5: Commit** `git commit -m "feat: pluggable notification channels"`
 
 ---
 
@@ -300,7 +300,7 @@ grep -q "noop blocked" /tmp/lightsout-notify; check "notify cmd fired" 0 "$?"
 - Consumes: `state/last`.
 - Produces: `state/runs.tsv` `<start-iso>\t<end-iso>\t<rc>\t<verb>\t<unit>\t<seconds>`; `status --json` gains `runs` (last 10) and `last_duration`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```bash
 reset
@@ -310,13 +310,13 @@ n=$(wc -l < jobs/noop/state/runs.tsv | tr -d ' ')
 check "two runs recorded" 2 "$n"
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — no `runs.tsv`.
+- [x] **Step 2: Run it and watch it fail** — no `runs.tsv`.
 
-- [ ] **Step 3: Implement** — `record` gets the start timestamp from a `state/start` file written before exec; append one line per completed run.
+- [x] **Step 3: Implement** — `record` gets the start timestamp from a `state/start` file written before exec; append one line per completed run.
 
-- [ ] **Step 4: Run the tests** — passes.
+- [x] **Step 4: Run the tests** — passes.
 
-- [ ] **Step 5: Commit** `git commit -m "feat: run history with durations"`
+- [x] **Step 5: Commit** `git commit -m "feat: run history with durations"`
 
 ---
 
@@ -331,7 +331,7 @@ check "two runs recorded" 2 "$n"
 - Consumes: nothing.
 - Produces: `u_resource <name>` acquires `state/resources/<name>.lock` containing `pid<TAB>expiry-epoch`, reclaims an expired or dead pid, releases on EXIT; waits up to `U_RESOURCE_WAIT` seconds (default 0) then exits `0` held.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```bash
 reset
@@ -345,13 +345,13 @@ reset
 bin/job run noop >/dev/null 2>&1; check "expired resource reclaimed" 0 "$?"
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — the fixture ignores resources.
+- [x] **Step 2: Run it and watch it fail** — the fixture ignores resources.
 
-- [ ] **Step 3: Implement** — acquire/release with the same stale-pid logic as the run lock, plus expiry.
+- [x] **Step 3: Implement** — acquire/release with the same stale-pid logic as the run lock, plus expiry.
 
-- [ ] **Step 4: Run the tests** — passes.
+- [x] **Step 4: Run the tests** — passes.
 
-- [ ] **Step 5: Commit** `git commit -m "feat: cross-job resource locks"`
+- [x] **Step 5: Commit** `git commit -m "feat: cross-job resource locks"`
 
 ---
 
@@ -366,20 +366,20 @@ bin/job run noop >/dev/null 2>&1; check "expired resource reclaimed" 0 "$?"
 - Consumes: nothing.
 - Produces: `gates.py manifest --file shots.json --min 15`; the JSON is a list of `{shot, query, file, approved}`; passes only when every entry has `approved: true` and `file` exists and is non-empty; message names the first unapproved shot.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```bash
 printf '[{"shot":1,"query":"staff badge","file":"%s","approved":false}]' "$PWD/jobs/noop/out/hello.txt" > /tmp/shots.json
 lib/gates.py manifest --file /tmp/shots.json --min 1; check "unapproved shot fails" 1 "$?"
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — unknown subcommand.
+- [x] **Step 2: Run it and watch it fail** — unknown subcommand.
 
-- [ ] **Step 3: Implement** — argparse subcommand; read JSON; check count, approvals, files; report the first offender by shot number and query.
+- [x] **Step 3: Implement** — argparse subcommand; read JSON; check count, approvals, files; report the first offender by shot number and query.
 
-- [ ] **Step 4: Run the tests** — passes both ways (approved and not).
+- [x] **Step 4: Run the tests** — passes both ways (approved and not).
 
-- [ ] **Step 5: Commit** `git commit -m "feat: asset approval manifest gate"`
+- [x] **Step 5: Commit** `git commit -m "feat: asset approval manifest gate"`
 
 ---
 
@@ -395,7 +395,7 @@ lib/gates.py manifest --file /tmp/shots.json --min 1; check "unapproved shot fai
 - Consumes: `U_PI_MEMORY`, `U_MEMORY_FILES`.
 - Produces: `gates.py memory --files a.md,b.md` exits `0` only when the stub store's three scripts all exit `0`; `u_memory_pass` calls it instead of shelling the three commands inline.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```bash
 reset
@@ -406,13 +406,13 @@ U_MEMORY=1 U_PI_MEMORY="$PWD/tests/fake-pi-memory" FAKE_MEMORY_RC=0 bin/job run 
 check "a passing memory pass completes" 0 "$?"
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — the real store is used, so the test either passes wrongly or hits `~/pi-memory`.
+- [x] **Step 2: Run it and watch it fail** — the real store is used, so the test either passes wrongly or hits `~/pi-memory`.
 
-- [ ] **Step 3: Implement** — the fake store's three scripts exit `$FAKE_MEMORY_RC`; `gates.py memory` runs save → lint → receipt and reports which failed.
+- [x] **Step 3: Implement** — the fake store's three scripts exit `$FAKE_MEMORY_RC`; `gates.py memory` runs save → lint → receipt and reports which failed.
 
-- [ ] **Step 4: Run the tests** — passes.
+- [x] **Step 4: Run the tests** — passes.
 
-- [ ] **Step 5: Commit** `git commit -m "test: memory pass is enforced and testable"`
+- [x] **Step 5: Commit** `git commit -m "test: memory pass is enforced and testable"`
 
 ---
 
@@ -427,7 +427,7 @@ check "a passing memory pass completes" 0 "$?"
 - Consumes: `U_RUNNER` ∈ `dsh|claude|codex|fake`.
 - Produces: `u_agent <prompt-file> <marker>` — runs the runner non-interactively, writes the marker only after the runner exits `0`, returns non-zero on runner failure; a second call with an existing marker returns `0` without invoking the runner.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```bash
 reset
@@ -437,13 +437,13 @@ bin/job run noop >/dev/null 2>&1
 check "agent invoked once" 1 "$(wc -l < "$calls" | tr -d ' ')"
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — no adapter exists.
+- [x] **Step 2: Run it and watch it fail** — no adapter exists.
 
-- [ ] **Step 3: Implement** — dispatch table; each runner gets its documented non-interactive invocation; the marker is `<prompt>.done` under `$STATE`.
+- [x] **Step 3: Implement** — dispatch table; each runner gets its documented non-interactive invocation; the marker is `<prompt>.done` under `$STATE`.
 
-- [ ] **Step 4: Run the tests** — passes.
+- [x] **Step 4: Run the tests** — passes.
 
-- [ ] **Step 5: Commit** `git commit -m "feat: one agent wrapper for every runner"`
+- [x] **Step 5: Commit** `git commit -m "feat: one agent wrapper for every runner"`
 
 ---
 
@@ -458,7 +458,7 @@ check "agent invoked once" 1 "$(wc -l < "$calls" | tr -d ' ')"
 - Consumes: a spec file with the headings `deliverable`, `cadence`, `unit`, `inputs`, `stages`, `guards`, `publish`, `memory`, `budget`; each stage line containing `gate:`.
 - Produces: `jobs/<name>/job.sh` where every stage's gate is `u_gate never`, and `jobs/<name>/spec.md`; refuses (exit `64`) if a heading is missing or a stage has no `gate:`; `bin/job plan <name>` exits `0` and reports each unimplemented gate.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```bash
 rm -rf jobs/example
@@ -467,13 +467,13 @@ bin/scaffold spec/examples/digest.md >/dev/null; check "scaffold exits 0" 0 "$?"
 bin/scaffold spec/examples/digest.md >/dev/null; check "scaffold refuses to overwrite" 64 "$?"
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — no `bin/scaffold`.
+- [x] **Step 2: Run it and watch it fail** — no `bin/scaffold`.
 
-- [ ] **Step 3: Implement** — parse headings with awk; emit a job that calls `u_guard_*`, then one `u_gate never` per stage, then `u_memory_pass` and `u_done`; write only when the target does not exist.
+- [x] **Step 3: Implement** — parse headings with awk; emit a job that calls `u_guard_*`, then one `u_gate never` per stage, then `u_memory_pass` and `u_done`; write only when the target does not exist.
 
-- [ ] **Step 4: Run the tests** — passes.
+- [x] **Step 4: Run the tests** — passes.
 
-- [ ] **Step 5: Commit** `git commit -m "feat: spec to job scaffolder"`
+- [x] **Step 5: Commit** `git commit -m "feat: spec to job scaffolder"`
 
 ---
 
@@ -488,18 +488,18 @@ bin/scaffold spec/examples/digest.md >/dev/null; check "scaffold refuses to over
 - Consumes: the real driver at `../video-automation/pipeline/daily-build.sh` via `VIDEO_REPO` (default `$HOME/programming/video-automation`).
 - Produces: `bin/job plan everyday-laws` prints the same episode the driver's preflight prints; `bin/job run everyday-laws` runs stage 1 through `u_agent` and stages 2–8 through the driver, with the master gated by duration/resolution/loudness.
 
-- [ ] **Step 1: Write the failing test** — `bin/job plan everyday-laws` exits `64` (no such job).
+- [x] **Step 1: Write the failing test** — `bin/job plan everyday-laws` exits `64` (no such job).
 
-- [ ] **Step 2: Implement** the job: `u_guard_day`, `u_guard_lock`, `u_guard_attempts`, `u_guard_disk 2000`, preflight parse, `u_agent` for stage 1, driver for stages 2–8, `u_gate duration/resolution/loudness` on the master, `u_memory_pass`, `u_done`.
+- [x] **Step 2: Implement** the job: `u_guard_day`, `u_guard_lock`, `u_guard_attempts`, `u_guard_disk 2000`, preflight parse, `u_agent` for stage 1, driver for stages 2–8, `u_gate duration/resolution/loudness` on the master, `u_memory_pass`, `u_done`.
 
-- [ ] **Step 3: Verify with plan only**
+- [x] **Step 3: Verify with plan only**
 
 Run: `bin/job plan everyday-laws`
 Expected: prints the next episode number and every gate it would apply; writes nothing.
 
-- [ ] **Step 4: One supervised real run**, comparing the master to the previous night's.
+- [x] **Step 4: One supervised real run**, comparing the master to the previous night's.
 
-- [ ] **Step 5: Commit** `git commit -m "feat: port the everyday-laws video job"`
+- [x] **Step 5: Commit** `git commit -m "feat: port the everyday-laws video job"`
 
 ---
 
