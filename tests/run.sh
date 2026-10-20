@@ -825,6 +825,88 @@ check "plan does not invoke the agent" 0 "$(agent_invocations)"
 
 rm -rf "$agent_direct" "$agent_decoy" "$agent_calls"
 
+# 22 — the scaffolder: a spec becomes a job whose every stage gate is `never`,
+# a spec with a missing heading or a stage without a gate is refused, and an
+# existing job is never overwritten (Task 13). The job the test scaffolds is
+# deleted when the test finishes, so `bin/job list` is left as it was found.
+scaffold_spec=spec/examples/digest.md
+scaffold_job=jobs/morning-digest   # the name comes from `# spec:` in the spec
+scaffold_bad=$(mktemp -d "${TMPDIR:-/tmp}/lightsout-scaffold.XXXXXX")
+rm -rf "$scaffold_job" jobs/no-budget jobs/no-gate-stage
+
+out=$(bin/scaffold "$scaffold_spec" 2>&1); rc=$?
+check "scaffold exits 0" 0 "$rc"
+[ -x bin/scaffold ]; check "scaffold is executable" 0 "$?"
+[ -f "$scaffold_job/job.sh" ]; check "job emitted" 0 "$?"
+[ -f "$scaffold_job/spec.md" ]; check "the spec is copied into the job" 0 "$?"
+[ -x "$scaffold_job/job.sh" ]; check "the scaffolded job is executable" 0 "$?"
+cmp -s "$scaffold_spec" "$scaffold_job/spec.md"
+check "the copied spec matches the source" 0 "$?"
+check "the job is named from the spec" morning-digest "$(basename "$scaffold_job")"
+grep -qx morning-digest <<< "$(bin/job list)"
+check "the scaffolded job is listable" 0 "$?"
+
+# every stage becomes a fail-closed `never` gate, and the plan names each one
+check "one never gate per stage" 4 "$(grep -c '^u_gate never$' "$scaffold_job/job.sh")"
+grep -q '^u_guard_' "$scaffold_job/job.sh"
+check "the job calls a guard" 0 "$?"
+grep -q '^u_memory_pass' "$scaffold_job/job.sh"
+check "the job ends with a memory pass" 0 "$?"
+grep -q '^u_done$' "$scaffold_job/job.sh"
+check "the job marks the unit done" 0 "$?"
+plan_out=$(bin/job plan morning-digest 2>&1); rc=$?
+check "plan exits 0 for a scaffolded job" 0 "$rc"
+for label in collect summarize write "memory pass"; do
+  case "$plan_out" in
+    *"$label"*never*) printf 'ok   plan reports the %s gate as never\n' "$label" ;;
+    *) printf 'FAIL plan does not report %s: %s\n' "$label" "$plan_out"
+       fails=$((fails + 1)) ;;
+  esac
+done
+
+# an existing job is never overwritten: the scaffold refuses and the old job
+# stays byte-identical
+job_before=$(md5 -q "$scaffold_job/job.sh")
+out=$(bin/scaffold "$scaffold_spec" 2>&1); rc=$?
+check "scaffold refuses to overwrite" 64 "$rc"
+check "the existing job is untouched" "$job_before" \
+  "$(md5 -q "$scaffold_job/job.sh")"
+[ -f "$scaffold_job/spec.md" ]; check "the existing spec copy is untouched too" 0 "$?"
+
+# a spec missing one of the nine headings is refused, names the heading, and
+# writes nothing
+sed -e 's/^# spec: morning-digest$/# spec: no-budget/' \
+    -e '/^budget$/,$d' "$scaffold_spec" > "$scaffold_bad/no-budget.md"
+out=$(bin/scaffold "$scaffold_bad/no-budget.md" 2>&1); rc=$?
+check "scaffold refuses a missing heading" 64 "$rc"
+[ -e jobs/no-budget ]; check "a spec with a missing heading writes no job" 1 "$?"
+case "$out" in
+  *budget*) echo "ok   the refusal names the missing heading" ;;
+  *) echo "FAIL missing heading not named: $out"; fails=$((fails + 1)) ;;
+esac
+
+# a stage without `gate:` is refused the same way, because a stage nobody can
+# judge is exactly what the schema forbids
+sed -e 's/^# spec: morning-digest$/# spec: no-gate-stage/' \
+    -e 's/gate:.*$//' "$scaffold_spec" > "$scaffold_bad/no-gate.md"
+out=$(bin/scaffold "$scaffold_bad/no-gate.md" 2>&1); rc=$?
+check "scaffold refuses a stage without a gate" 64 "$rc"
+[ -e jobs/no-gate-stage ]; check "a gate-less spec writes no job" 1 "$?"
+case "$out" in
+  *"no gate"*|*"gate:"*) echo "ok   the refusal names the missing gate" ;;
+  *) echo "FAIL missing gate not named: $out"; fails=$((fails + 1)) ;;
+esac
+
+# a missing spec file is misuse too, not a crash
+bin/scaffold "$scaffold_bad/nope.md" >/dev/null 2>&1
+check "scaffold refuses a spec that does not exist" 64 "$?"
+
+# the test cleans up after itself: the scaffolded job is gone, and so is the
+# dashboard row it would otherwise add
+rm -rf "$scaffold_job" jobs/no-budget jobs/no-gate-stage "$scaffold_bad"
+grep -qx morning-digest <<< "$(bin/job list)"
+check "the test deletes the job it scaffolded" 1 "$?"
+
 reset
 echo
 if [ "$fails" -eq 0 ]; then echo "all checks passed"; else echo "$fails check(s) failed"; exit 1; fi
