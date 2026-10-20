@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# fake-agent.sh — the stand-in behind U_RUNNER=fake. It never calls a model.
+#
+# lib/agent.sh invokes it with the prompt file as the only argument, which is
+# the shape every real runner gets (a prompt file, no interactive questions).
+# It records one line per invocation in FAKE_AGENT_LOG, so a test can prove an
+# agent step ran once and a rerun did not pay for it again, and writes the
+# artifact a job's gate checks next to the prompt as <prompt>.out.
+#
+#   FAKE_AGENT_LOG  append one "<iso>TAB<prompt>" line per call
+#   FAKE_AGENT_RC   exit code (default 0); a non-zero run writes no artifact
+#   FAKE_AGENT_OUT  artifact path (default <prompt>.out)
+set -euo pipefail
+
+prompt="${1:-}"
+if [ -z "$prompt" ]; then
+  echo "fake-agent: a prompt file is required" >&2
+  exit 64
+fi
+if [ -n "${FAKE_AGENT_LOG:-}" ]; then
+  printf '%s\t%s\n' "$(date -Iseconds)" "$prompt" >> "$FAKE_AGENT_LOG"
+fi
+rc="${FAKE_AGENT_RC:-0}"
+case "$rc" in
+  ''|*[!0-9]*) echo "fake-agent: FAKE_AGENT_RC must be a whole number" >&2; exit 64 ;;
+esac
+if [ "$rc" -ne 0 ]; then
+  echo "fake-agent: runner failed (FAKE_AGENT_RC=$rc)" >&2
+  exit "$rc"
+fi
+[ -f "$prompt" ] || { echo "fake-agent: no prompt at $prompt" >&2; exit 66; }
+out="${FAKE_AGENT_OUT:-$prompt.out}"
+printf 'fake agent: %s\n' "${prompt##*/}" > "$out"
+printf 'fake agent: wrote %s\n' "$out"

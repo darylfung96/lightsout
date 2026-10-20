@@ -38,6 +38,13 @@ blocked_alerts() {
   awk '/noop blocked/ { n++ } END { print n + 0 }' logs/alerts.log
 }
 
+# agent_invocations — how many times the fake runner ran in Task 12's checks.
+# The log does not exist until the first call, and a missing log is zero calls.
+agent_invocations() {
+  if [ -f "${agent_calls:-}" ]; then wc -l < "$agent_calls" | tr -d ' '
+  else echo 0; fi
+}
+
 # 1 — a fresh run finishes and writes its marker
 reset
 bin/job run noop >/dev/null 2>&1; check "fresh run exits 0" 0 "$?"
@@ -715,6 +722,108 @@ HOME="$memory_home" U_PI_MEMORY="$fake_memory/missing" FAKE_MEMORY_RC=0 \
 check "a missing store fails closed" 1 "$?"
 
 rm -rf "$memory_home" "$memory_log"
+
+# 21 — the agent adapter: one runner per step, a marker that freezes a passing
+# result, a failing runner that writes nothing, and no path from `fake` to a
+# real model (Task 12). The fixture's agent stage is opt-in (NOOP_AGENT=1),
+# because every other check runs the fixture and none of them may spawn a model.
+agent_prompt="jobs/noop/state/prompt-$(date +%F).md"
+agent_marker="$agent_prompt.done"
+agent_calls=$(mktemp "${TMPDIR:-/tmp}/lightsout-agent-calls.XXXXXX")
+
+reset
+rm -f "$agent_calls"
+NOOP_AGENT=1 U_RUNNER=fake FAKE_AGENT_LOG="$agent_calls" bin/job run noop >/dev/null 2>&1
+check "a fake-runner agent step completes" 0 "$?"
+check "agent invoked once" 1 "$(agent_invocations)"
+[ -f "$agent_marker" ]; check "a passing runner writes the marker" 0 "$?"
+[ -s "$agent_prompt" ]; check "the prompt is a rendered file" 0 "$?"
+[ -f "$agent_prompt.out" ]; check "the agent's artifact reaches the gate" 0 "$?"
+NOOP_AGENT=1 U_RUNNER=fake FAKE_AGENT_LOG="$agent_calls" bin/job run noop >/dev/null 2>&1
+check "a held rerun does not invoke the agent" 1 "$(agent_invocations)"
+
+# a later stage failing leaves the marker behind, so the rerun re-checks the gate
+# instead of paying for a second model call
+reset
+rm -f "$agent_calls"
+NOOP_AGENT=1 U_RUNNER=fake FAKE_AGENT_LOG="$agent_calls" NOOP_BLOCK=1 \
+  bin/job run noop >/dev/null 2>&1
+check "a later stage failing blocks the run" 2 "$?"
+[ -f "$agent_marker" ]; check "the marker survives a later failure" 0 "$?"
+bin/job unblock noop >/dev/null 2>&1
+NOOP_AGENT=1 U_RUNNER=fake FAKE_AGENT_LOG="$agent_calls" bin/job run noop >/dev/null 2>&1
+check "the rerun after a partial failure completes" 0 "$?"
+check "a rerun does not pay for the agent again" 1 "$(agent_invocations)"
+
+# a runner that fails writes no marker and does not finish the unit
+reset
+rm -f "$agent_calls"
+NOOP_AGENT=1 U_RUNNER=fake FAKE_AGENT_LOG="$agent_calls" FAKE_AGENT_RC=1 \
+  bin/job run noop >/dev/null 2>&1
+check "a failing runner fails the job" 1 "$?"
+check "a failing runner was tried once" 1 "$(agent_invocations)"
+[ -f "$agent_marker" ]; check "a failing runner writes no marker" 1 "$?"
+[ -f "jobs/noop/state/done/$(date +%F)" ]
+check "a failing agent does not finish the unit" 1 "$?"
+
+# u_agent itself: a bare marker lands under $STATE, the second call is free, and
+# a runner failure is returned to the job rather than swallowed
+agent_direct=$(mktemp -d "${TMPDIR:-/tmp}/lightsout-agent-direct.XXXXXX")
+printf 'prompt for the adapter\n' > "$agent_direct/prompt.md"
+rm -f "$agent_calls"
+out=$(REPO="$PWD" STATE="$agent_direct" LOG="$agent_direct/agent.log" DRY=0 \
+  U_RUNNER=fake FAKE_AGENT_LOG="$agent_calls" bash -c '
+    . "$REPO/lib/guards.sh"
+    u_agent "$1/prompt.md" adapter.done; a=$?
+    u_agent "$1/prompt.md" adapter.done; b=$?
+    printf "%s %s\n" "$a" "$b"' _ "$agent_direct" | tail -1)
+check "u_agent is once, then free" "0 0" "$out"
+check "the second u_agent call does not invoke the runner" 1 \
+  "$(agent_invocations)"
+[ -f "$agent_direct/adapter.done" ]; check "a bare marker is written under STATE" 0 "$?"
+out=$(REPO="$PWD" STATE="$agent_direct" LOG="$agent_direct/agent.log" DRY=0 \
+  U_RUNNER=fake FAKE_AGENT_RC=1 bash -c '
+    . "$REPO/lib/guards.sh"
+    u_agent "$1/prompt.md" failed.done
+    printf "rc=%s\n" "$?"' _ "$agent_direct" 2>/dev/null | tail -1)
+check "u_agent returns non-zero on runner failure" "rc=1" "$out"
+[ -f "$agent_direct/failed.done" ]; check "a failed u_agent writes no marker" 1 "$?"
+
+# U_RUNNER=fake must run the repository's own stub: decoys named like every
+# other runner, and a fake-agent.sh of their own, are never touched, so a fake
+# step cannot reach a real model or an arbitrary program on PATH
+agent_decoy=$(mktemp -d "${TMPDIR:-/tmp}/lightsout-agent-decoy.XXXXXX")
+for c in dsh claude codex fake-agent.sh; do
+  printf '#!/bin/sh\nprintf "%%s\\n" "$0" >> "%s/used"\nexit 0\n' "$agent_decoy" \
+    > "$agent_decoy/$c"
+  chmod +x "$agent_decoy/$c"
+done
+[ -x tests/fake-agent.sh ]; check "the fake runner is a committed stub" 0 "$?"
+reset
+rm -f "$agent_calls"
+NOOP_AGENT=1 U_RUNNER=fake FAKE_AGENT_LOG="$agent_calls" PATH="$agent_decoy:$PATH" \
+  bin/job run noop >/dev/null 2>&1
+check "the fake runner does not change the verdict" 0 "$?"
+[ -f "$agent_decoy/used" ]; check "no runner reachable by PATH is called" 1 "$?"
+check "the repository's stub is the one that ran" 1 \
+  "$(agent_invocations)"
+
+# an unknown runner is a code error: it fails before anything is frozen
+reset
+NOOP_AGENT=1 U_RUNNER=not-a-runner bin/job run noop >/dev/null 2>&1
+check "an unknown runner fails closed" 1 "$?"
+[ -f "$agent_marker" ]; check "an unknown runner writes no marker" 1 "$?"
+
+# plan runs no agent and renders no prompt
+reset
+rm -f "$agent_calls"
+NOOP_AGENT=1 U_RUNNER=fake FAKE_AGENT_LOG="$agent_calls" bin/job plan noop >/dev/null 2>&1
+check "plan with an agent stage exits 0" 0 "$?"
+check "plan does not invoke the agent" 0 "$(agent_invocations)"
+[ -f "$agent_prompt" ]; check "plan renders no prompt" 1 "$?"
+[ -f "$agent_marker" ]; check "plan writes no marker" 1 "$?"
+
+rm -rf "$agent_direct" "$agent_decoy" "$agent_calls"
 
 reset
 echo

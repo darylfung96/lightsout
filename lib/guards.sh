@@ -20,6 +20,11 @@ u_die()   { u_say "FATAL: $*"; exit 1; }
 # release-on-EXIT trap are one file, so every job waits the same way.
 . "$REPO/lib/locks.sh"
 
+# u_agent lives in lib/agent.sh: the runner table, the prompt file and the
+# marker that freezes a paid agent step are one file, so every job runs an
+# agent the same way (docs/agent-step.md).
+. "$REPO/lib/agent.sh"
+
 # blocked = retrying will not fix it. One notification, then quiet persistence.
 # state/blocked is TSV <iso>TAB<class>TAB<source>TAB<reason>; the class decides
 # what may be done about it. Defaults: human, unknown (docs/run-contract.md).

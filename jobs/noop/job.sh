@@ -45,6 +45,25 @@ u_gate exists --file "$OUT/hello.txt"
 # again. U_SPEND_CAP overrides the fixture's 100c daily budget.
 u_guard_spend "${U_SPEND_CAP:-100}"
 
+# Stage 2 — the agent step, opt-in with NOOP_AGENT=1 because every check runs
+# this fixture and none of them may spawn a model. The prompt is a file the job
+# renders, the adapter runs the configured runner once, and the gate judges the
+# artifact on every attempt: the marker u_agent leaves freezes the paid call,
+# never the verdict (docs/agent-step.md). U_RUNNER=fake points the adapter at
+# tests/fake-agent.sh, so a test exercises this stage without a model.
+if [ "${NOOP_AGENT:-0}" = 1 ]; then
+  prompt="$STATE/prompt-$UNIT.md"
+  if [ "$DRY" = 1 ]; then
+    u_say "plan: would render $prompt and run the agent"
+  else
+    printf 'noop agent prompt for %s\n\nWrite the artifact to %s\n' \
+      "$UNIT" "$prompt.out" > "$prompt"
+    u_say "stage 2: prompt rendered ($prompt)"
+    u_agent "$prompt" "$prompt.done" || u_die "agent step failed"
+    u_gate exists --file "$prompt.out"
+  fi
+fi
+
 if [ "${NOOP_BLOCK:-0}" = 1 ]; then
   # NOOP_CLASS lets the fixture raise each class; the allowlisted repair for it
   # is touch-missing (lib/repairs.sh), which `bin/job retry noop` runs.
@@ -52,7 +71,7 @@ if [ "${NOOP_BLOCK:-0}" = 1 ]; then
           "simulated gate failure (NOOP_BLOCK=1)"
 fi
 
-u_say "stage 2: memory pass"
+u_say "stage 3: memory pass"
 u_memory_pass || u_block "memory pass failed"
 
 u_done
