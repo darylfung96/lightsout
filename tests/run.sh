@@ -907,6 +907,168 @@ rm -rf "$scaffold_job" jobs/no-budget jobs/no-gate-stage "$scaffold_bad"
 grep -qx morning-digest <<< "$(bin/job list)"
 check "the test deletes the job it scaffolded" 1 "$?"
 
+# 23 — the video job: `plan` names the episode the driver would build and every
+# gate it would apply, read from the driver's checkout without writing there; a
+# run on a fixture driver (no media, no network, no real video repo) goes
+# through the agent, the driver and the master gates (Task 14).
+video_repo=$(mktemp -d "${TMPDIR:-/tmp}/lightsout-video.XXXXXX")
+mkdir -p "$video_repo"/automation "$video_repo"/bin "$video_repo"/episodes \
+  "$video_repo"/lessons "$video_repo"/notes "$video_repo"/outbox "$video_repo"/pipeline
+video_tree_hash() { find "$1" -type f | sort | xargs md5 -q | md5 -q; }
+
+cat > "$video_repo/lessons/ledger.jsonl" <<'JSON'
+{"episode": "041", "title": "A Previous Episode", "principle": "old", "status": "built", "date": "2026-10-19"}
+JSON
+: > "$video_repo/outbox/041-master.mp4"
+cat > "$video_repo/pipeline/topic-queue.txt" <<'TXT'
+041|A Previous Episode|OBS. 041 — THE OLD ONE|calm|old
+042|Why Unfinished Things Stay With You|OBS. 042 — THE LOOSE THREAD|curious|the mind keeps what is unresolved in view
+043|A Later Episode|OBS. 043 — THE NEXT ONE|calm|next
+TXT
+cat > "$video_repo/automation/lesson-task.md" <<'TXT'
+# Daily lesson — {{RUN_DATE}}
+
+Episode **{{EP}}**. Queue line: `{{TOPIC_LINE}}`.
+TXT
+printf '# notes\n\n## [2026-10-19] build | № 041 "A Previous Episode" built\n' \
+  > "$video_repo/notes/60-log.md"
+
+cat > "$video_repo/pipeline/lesson-check.py" <<'PY'
+#!/usr/bin/env python3
+import sys
+print("LESSON-OK")
+sys.exit(0)
+PY
+cat > "$video_repo/pipeline/lesson-split.py" <<'PY'
+#!/usr/bin/env python3
+import pathlib, sys
+ep = pathlib.Path(sys.argv[1])
+(ep / "_scratch").mkdir(parents=True, exist_ok=True)
+(ep / "_scratch/meta.json").write_text("{}\n")
+(ep / "narration").mkdir(parents=True, exist_ok=True)
+(ep / "narration/tts.txt").write_text("narration\n")
+print("split ok")
+PY
+chmod +x "$video_repo/pipeline/lesson-check.py" "$video_repo/pipeline/lesson-split.py"
+
+cat > "$video_repo/pipeline/daily-build.sh" <<'SH'
+#!/bin/bash
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+printf '%s\n' "$*" >> "$here/../calls.log"
+case "${1:-}" in
+  --preflight)
+    printf '[fixture] next episode: %s\n' "${FAKE_NEXT_EP:-042}"
+    printf '[fixture] preflight OK (ep %s, beds 3)\n' "${FAKE_NEXT_EP:-042}"
+    exit 0 ;;
+  *)
+    : > "$here/../outbox/$1-master.mp4"
+    printf '[fixture] built %s\n' "$1"
+    exit 0 ;;
+esac
+SH
+chmod +x "$video_repo/pipeline/daily-build.sh"
+
+cat > "$video_repo/bin/ffprobe" <<'SH'
+#!/bin/sh
+res="${FAKE_VIDEO_RES:-1080x1920}"
+w=1080; h=1920
+case "$res" in
+  *x*) w=${res%x*}; h=${res#*x} ;;
+esac
+printf '{"format":{"duration":"60.00"},"streams":[{"codec_type":"video","width":%s,"height":%s}]}\n' "$w" "$h"
+SH
+cat > "$video_repo/bin/ffmpeg" <<'SH'
+#!/bin/sh
+printf '[Parsed_ebur128_0] Summary:\n  I: -14.0 LUFS\n' >&2
+exit 0
+SH
+chmod +x "$video_repo/bin/ffprobe" "$video_repo/bin/ffmpeg"
+
+rm -rf jobs/everyday-laws/state jobs/everyday-laws/out jobs/everyday-laws/logs
+[ -f jobs/everyday-laws/spec.md ] && cmp -s spec/examples/video.md jobs/everyday-laws/spec.md
+check "the video spec is a copy of the example" 0 "$?"
+grep -qi "first real run is supervised" jobs/everyday-laws/job.sh
+check "the job records that its first run is supervised" 0 "$?"
+
+video_tree_before=$(video_tree_hash "$video_repo")
+out=$(VIDEO_REPO="$video_repo" bin/job plan everyday-laws 2>&1); rc=$?
+check "video plan exits 0" 0 "$rc"
+case "$out" in
+  *"next episode: 042"*) echo "ok   plan names the next episode" ;;
+  *) echo "FAIL plan does not name the next episode: $out"; fails=$((fails + 1)) ;;
+esac
+for want in "lesson-check.py" "daily-build.sh 042" "duration" "resolution" \
+            "loudness" "--min 59" "--max 61" "--w 1080" "--h 1920" \
+            "--target -14" "--tol 1" "memory"; do
+  case "$out" in
+    *"$want"*) ;;
+    *) echo "FAIL plan omits the $want gate"; fails=$((fails + 1)) ;;
+  esac
+done
+[ -f "$video_repo/calls.log" ]
+check "plan does not execute the driver" 1 "$?"
+check "plan writes no state or output" 0 \
+  "$(find jobs/everyday-laws/state jobs/everyday-laws/out -type f 2>/dev/null | wc -l | tr -d ' ')"
+check "plan writes no job log" 0 \
+  "$(find jobs/everyday-laws/logs -type f 2>/dev/null | wc -l | tr -d ' ')"
+check "plan writes nothing in the driver's checkout" "$video_tree_before" \
+  "$(video_tree_hash "$video_repo")"
+
+# the driver's rule is first-incomplete, then one past the ledger: a plan that
+# only read the ledger maximum would answer 045 here
+mkdir -p "$video_repo/episodes/043"
+printf '{"episode": "044", "title": "Posted Already", "principle": "x", "status": "posted", "date": "2026-10-19"}\n' \
+  >> "$video_repo/lessons/ledger.jsonl"
+: > "$video_repo/outbox/044-master.mp4"
+out=$(VIDEO_REPO="$video_repo" bin/job plan everyday-laws 2>&1)
+case "$out" in
+  *"next episode: 043"*) echo "ok   plan resumes the unfinished episode first" ;;
+  *) echo "FAIL plan did not resume the unfinished episode: $out"; fails=$((fails + 1)) ;;
+esac
+
+# a run against the fixture driver: stage 1 through the fake agent, stages 2-8
+# through the driver, then the three master gates and the memory pass
+video_agent_log=$(mktemp "${TMPDIR:-/tmp}/lightsout-video-agent.XXXXXX")
+rm -rf jobs/everyday-laws/state jobs/everyday-laws/out jobs/everyday-laws/logs \
+  "$video_repo/calls.log"
+PATH="$video_repo/bin:$PATH" VIDEO_REPO="$video_repo" U_RUNNER=fake \
+  FAKE_AGENT_LOG="$video_agent_log" \
+  FAKE_AGENT_OUT="$video_repo/episodes/042/lesson-raw.md" \
+  U_MEMORY=1 U_PI_MEMORY="$PWD/tests/fake-pi-memory" \
+  bin/job run everyday-laws >/dev/null 2>&1
+check "the fixture video run exits 0" 0 "$?"
+check "the agent ran stage 1 once" 1 \
+  "$(wc -l < "$video_agent_log" 2>/dev/null | tr -d ' ')"
+check "the driver was asked to preflight and build" 2 \
+  "$(wc -l < "$video_repo/calls.log" 2>/dev/null | tr -d ' ')"
+check "the preflight comes first" "--preflight" \
+  "$(sed -n '1p' "$video_repo/calls.log" 2>/dev/null)"
+check "the build gets the episode number" "042" \
+  "$(sed -n '2p' "$video_repo/calls.log" 2>/dev/null)"
+[ -f "$video_repo/outbox/042-master.mp4" ]
+check "the master is on disk" 0 "$?"
+[ -f "jobs/everyday-laws/state/done/$(date +%F)" ]
+check "a passing master marks the day done" 0 "$?"
+
+# a master the resolution gate rejects blocks the job and does not mark the day
+rm -rf jobs/everyday-laws/state jobs/everyday-laws/out jobs/everyday-laws/logs \
+  "$video_repo/calls.log"
+PATH="$video_repo/bin:$PATH" VIDEO_REPO="$video_repo" U_RUNNER=fake \
+  FAKE_AGENT_LOG="$video_agent_log" \
+  FAKE_AGENT_OUT="$video_repo/episodes/042/lesson-raw.md" FAKE_VIDEO_RES=720x1280 \
+  U_MEMORY=1 U_PI_MEMORY="$PWD/tests/fake-pi-memory" \
+  bin/job run everyday-laws >/dev/null 2>&1
+check "a master that is not 1080x1920 blocks" 2 "$?"
+[ -f jobs/everyday-laws/state/blocked ]
+check "the bad master leaves a block" 0 "$?"
+grep -q "resolution" jobs/everyday-laws/state/blocked 2>/dev/null
+check "the block names the resolution gate" 0 "$?"
+[ -f "jobs/everyday-laws/state/done/$(date +%F)" ]
+check "a blocked master does not mark the day done" 1 "$?"
+
+rm -rf "$video_repo" "$video_agent_log" jobs/everyday-laws/state \
+  jobs/everyday-laws/out jobs/everyday-laws/logs
 reset
 echo
 if [ "$fails" -eq 0 ]; then echo "all checks passed"; else echo "$fails check(s) failed"; exit 1; fi
