@@ -2,23 +2,17 @@
 # Rules: ~/pi-memory/shared/memory-update-policy.md, wiki-policy.md.
 # qmd needs file access outside the workspace sandbox; run jobs unsandboxed.
 # Set U_MEMORY=1 to enable, U_MEMORY_FILES="notes/a.md notes/b.md" to name what changed.
+# U_PI_MEMORY names the store; tests point it at tests/fake-pi-memory.
 
-U_PI_MEMORY="${U_PI_MEMORY:-$HOME/pi-memory}"
+export U_PI_MEMORY="${U_PI_MEMORY:-$HOME/pi-memory}"
 
-u_memory_save() {
-  local f
-  for f in "$@"; do
-    [ -f "$f" ] || u_block "memory pass: $f does not exist"
-    "$U_PI_MEMORY/qmd-mem.sh" save "$f" || return 1
-  done
-}
-
-u_memory_lint() {
-  python3 "$U_PI_MEMORY/lint-memory.py" --deep
-}
-
-u_memory_receipt() {
-  python3 "$U_PI_MEMORY/memory-pass-check.py" --latest --cwd "$PWD"
+# u_memory_check — the whole pass as one gate: save each named note, lint the
+# store, then prove the receipt, and fail when any step does (lib/gates.py
+# memory). A plain status, not a block, because the job decides how to report
+# the stop; U_MEMORY_FILES is the space-separated list the job already sets.
+u_memory_check() {
+  local files="${U_MEMORY_FILES:-}"
+  python3 "$REPO/lib/gates.py" memory --files "${files// /,}"
 }
 
 # Steps 0-5 of the policy, minus the judgment in step 0: a job only calls this
@@ -28,12 +22,7 @@ u_memory_pass() {
     u_say "memory pass: skipped (U_MEMORY!=1)"
     return 0
   fi
-  if [ -n "${U_MEMORY_FILES:-}" ]; then
-    # shellcheck disable=SC2086
-    u_memory_save $U_MEMORY_FILES || { u_say "memory pass: save failed"; return 1; }
-  fi
-  u_memory_lint || { u_say "memory pass: lint failed"; return 1; }
-  u_memory_receipt || { u_say "memory pass: receipt failed"; return 1; }
+  u_memory_check || { u_say "memory pass: failed"; return 1; }
   u_say "memory pass: ok"
   return 0
 }

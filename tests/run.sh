@@ -650,6 +650,72 @@ check "a manifest that is not a list fails" 1 "$?"
 
 rm -rf "$shots" /tmp/shots.json
 
+# 20 — the memory gate: the pass is one gate, and the store it trusts is
+# swappable, so a stub can fail save, lint or receipt and the job either blocks
+# or completes on the store's verdict (Task 11). HOME is a scratch directory
+# with no pi-memory in it, so a gate that ignored U_PI_MEMORY would fail rather
+# than reach the real store.
+fake_memory="$PWD/tests/fake-pi-memory"
+memory_home=$(mktemp -d "${TMPDIR:-/tmp}/lightsout-memory-home.XXXXXX")
+memory_log=$(mktemp "${TMPDIR:-/tmp}/lightsout-memory-log.XXXXXX")
+
+reset
+HOME="$memory_home" U_MEMORY=1 U_PI_MEMORY="$fake_memory" FAKE_MEMORY_RC=1 \
+  bin/job run noop >/dev/null 2>&1
+check "a failing memory pass blocks" 2 "$?"
+
+reset
+HOME="$memory_home" U_MEMORY=1 U_PI_MEMORY="$fake_memory" FAKE_MEMORY_RC=0 \
+  bin/job run noop >/dev/null 2>&1
+check "a passing memory pass completes" 0 "$?"
+
+# the pass runs save for each named note, then lint, then the receipt
+reset
+rm -f "$memory_log"
+HOME="$memory_home" U_MEMORY=1 U_MEMORY_FILES="notes/00-index.md" \
+  U_PI_MEMORY="$fake_memory" FAKE_MEMORY_RC=0 FAKE_MEMORY_LOG="$memory_log" \
+  bin/job run noop >/dev/null 2>&1
+check "a named note passes save, lint and receipt" 0 "$?"
+check "the pass runs all three store scripts" 3 \
+  "$(wc -l < "$memory_log" 2>/dev/null | tr -d ' ')"
+check "save gets the named note" "qmd-mem save notes/00-index.md" \
+  "$(sed -n '1p' "$memory_log" 2>/dev/null)"
+check "lint runs deep" "lint --deep" "$(sed -n '2p' "$memory_log" 2>/dev/null)"
+check "the receipt is asked for this workspace" "receipt --latest --cwd $PWD" \
+  "$(sed -n '3p' "$memory_log" 2>/dev/null)"
+
+# the gate names the step that failed: any one of the three stops the pass
+out=$(HOME="$memory_home" U_PI_MEMORY="$fake_memory" FAKE_MEMORY_RC=0 \
+  FAKE_MEMORY_FAIL=save lib/gates.py memory --files notes/00-index.md 2>&1); rc=$?
+check "a save failure fails the memory gate" 1 "$rc"
+case "$out" in
+  *"save notes/00-index.md failed"*) echo "ok   the gate names the failed save" ;;
+  *) echo "FAIL save failure not named: $out"; fails=$((fails + 1)) ;;
+esac
+
+out=$(HOME="$memory_home" U_PI_MEMORY="$fake_memory" FAKE_MEMORY_RC=0 \
+  FAKE_MEMORY_FAIL=lint lib/gates.py memory 2>&1); rc=$?
+check "a lint failure fails the memory gate" 1 "$rc"
+case "$out" in
+  *"lint failed"*) echo "ok   the gate names the failed lint" ;;
+  *) echo "FAIL lint failure not named: $out"; fails=$((fails + 1)) ;;
+esac
+
+out=$(HOME="$memory_home" U_PI_MEMORY="$fake_memory" FAKE_MEMORY_RC=0 \
+  FAKE_MEMORY_FAIL=receipt lib/gates.py memory 2>&1); rc=$?
+check "a receipt failure fails the memory gate" 1 "$rc"
+case "$out" in
+  *"receipt failed"*) echo "ok   the gate names the failed receipt" ;;
+  *) echo "FAIL receipt failure not named: $out"; fails=$((fails + 1)) ;;
+esac
+
+# an unreadable store is a failure, never a skipped check
+HOME="$memory_home" U_PI_MEMORY="$fake_memory/missing" FAKE_MEMORY_RC=0 \
+  lib/gates.py memory >/dev/null 2>&1
+check "a missing store fails closed" 1 "$?"
+
+rm -rf "$memory_home" "$memory_log"
+
 reset
 echo
 if [ "$fails" -eq 0 ]; then echo "all checks passed"; else echo "$fails check(s) failed"; exit 1; fi

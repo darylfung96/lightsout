@@ -132,6 +132,41 @@ def manifest(path="", min=0, **kw):
     return True, f"{len(shots)} shot{plural} approved"
 
 
+def memory(files="", **kw):
+    """The durable-memory pass as a gate: save the notes, lint, prove receipt.
+
+    The store is $U_PI_MEMORY (default ~/pi-memory), so the whole pass can be
+    pointed at a stub and tested without touching the real notes. --files is
+    comma-separated: each file is saved, then lint and the receipt always run.
+    Every command must exit 0, and the first failure names the step, because a
+    pass whose notes cannot be proven landed is a blocked job, not a warning
+    (docs/memory-pass.md).
+    """
+    store = os.environ.get("U_PI_MEMORY") or os.path.expanduser("~/pi-memory")
+    steps = []
+    for name in [f.strip() for f in files.split(",") if f.strip()]:
+        if not os.path.isfile(name):
+            return False, f"save {name} failed: file does not exist"
+        steps.append((f"save {name}",
+                      [os.path.join(store, "qmd-mem.sh"), "save", name]))
+    steps.append(("lint",
+                  [sys.executable, os.path.join(store, "lint-memory.py"),
+                   "--deep"]))
+    steps.append(("receipt",
+                  [sys.executable, os.path.join(store, "memory-pass-check.py"),
+                   "--latest", "--cwd", os.getcwd()]))
+    for label, cmd in steps:
+        try:
+            done = subprocess.run(cmd, capture_output=True, text=True)
+        except OSError as exc:
+            return False, f"{label} failed: {exc}"
+        if done.returncode != 0:
+            lines = (done.stderr or done.stdout).strip().splitlines()
+            detail = lines[-1] if lines else "no output"
+            return False, f"{label} failed (exit {done.returncode}): {detail}"
+    return True, f"{len(steps)} steps passed"
+
+
 def permalink(url="", **kw):
     req = urllib.request.Request(url, headers={"User-Agent": "lightsout-gate/1"})
     try:
@@ -148,13 +183,14 @@ def never(**kw):
 
 GATES = {f.__name__: f for f in
          (exists, contains, sections, duration, resolution, loudness, manifest,
-          permalink, never)}
+          memory, permalink, never)}
 
 
 def main(argv):
     parser = argparse.ArgumentParser(description="artifact gates")
     parser.add_argument("gate", choices=sorted(GATES))
     parser.add_argument("--file", dest="path", default="")
+    parser.add_argument("--files", default="")
     parser.add_argument("--url", default="")
     parser.add_argument("--text", default="")
     parser.add_argument("--require", default="")
