@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# report — render every job's state from its state files.
+set -euo pipefail
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+exec python3 "$REPO/lib/report.py" "$@"

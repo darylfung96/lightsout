@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# job — plan | run | status | resume | unblock | list. Contract: docs/run-contract.md
+set -euo pipefail
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+
+usage() {
+  cat <<'TXT'
+usage: job <verb> [name]
+
+  list                 jobs that exist
+  status [name]        state from files; --json for machines
+  plan <name>          what would run now; touches nothing
+  run <name>           do the work, resuming from disk
+  resume <name>        same as run
+  unblock <name>       clear a blocked marker after a human looks
+
+exit: 0 done or held, 1 failed, 2 blocked
+TXT
+}
+
+job_env() {
+  JOB="$1"
+  JOB_DIR="$REPO/jobs/$JOB"
+  [ -f "$JOB_DIR/job.sh" ] || { echo "no such job: $JOB" >&2; exit 64; }
+  STATE="$JOB_DIR/state"
+  OUT="$JOB_DIR/out"
+  mkdir -p "$STATE/attempts" "$STATE/done" "$OUT" "$JOB_DIR/logs" "$REPO/logs"
+  LOG="$JOB_DIR/logs/$(date +%F).log"
+  UNIT="${UNIT:-$(date +%F)}"
+  U_ALERTS="$REPO/logs/alerts.log"
+  DRY="${DRY:-0}"
+  export REPO JOB JOB_DIR STATE OUT LOG UNIT U_ALERTS DRY
+}
+
+record() { # record <verb> <rc>
+  local f="$STATE/last"
+  { cat "$f" 2>/dev/null || true
+    printf '%s\t%s\t%s\n' "$(date -Iseconds)" "$2" "$1"
+  } | tail -50 > "$f.tmp"
+  mv "$f.tmp" "$f"
+}
+
+run_job() { # run_job <name> <verb> <dry>
+  job_env "$1"
+  local verb="$2" dry="$3" rc=0
+  if [ "$dry" = 0 ] && [ -f "$STATE/blocked" ]; then
+    local raw; raw=$(cat "$STATE/blocked")
+    printf 'blocked since %s: %s\n' "${raw%%$'\t'*}" "${raw#*$'\t'}"
+    printf '  fix the cause, then: bin/job unblock %s\n' "$JOB"
+    exit 2
+  fi
+  DRY="$dry" bash "$JOB_DIR/job.sh" || rc=$?
+  if [ "$dry" = 0 ]; then record "$verb" "$rc"; fi
+  exit "$rc"
+}
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  list)
+    for d in "$REPO"/jobs/*/; do
+      [ -f "$d/job.sh" ] && basename "$d"
+    done ;;
+
+  status)
+    exec python3 "$REPO/lib/report.py" "$@" ;;
+
+  plan)
+    [ -n "${1:-}" ] || { usage; exit 64; }
+    run_job "$1" plan 1 ;;
+
+  run|resume)
+    [ -n "${1:-}" ] || { usage; exit 64; }
+    run_job "$1" "$cmd" 0 ;;
+
+  unblock)
+    [ -n "${1:-}" ] || { usage; exit 64; }
+    job_env "$1"
+    if [ -f "$STATE/blocked" ]; then
+      printf '%s\tunblocked\t%s\n' "$(date -Iseconds)" "$(cat "$STATE/blocked")" >> "$U_ALERTS"
+      rm -f "$STATE/blocked"
+      echo "unblocked $JOB"
+    else
+      echo "$JOB was not blocked"
+    fi ;;
+
+  help|-h|--help) usage ;;
+  *) usage; exit 64 ;;
+esac

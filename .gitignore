@@ -1,0 +1,6 @@
+logs/
+jobs/*/logs/
+jobs/*/state/
+jobs/*/out/
+out/
+*.tmp
