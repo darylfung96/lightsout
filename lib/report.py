@@ -97,6 +97,56 @@ def held_today(st):
     return False
 
 
+def run_history(st, limit=10):
+    """state/runs.tsv is <start-iso>TAB<end-iso>TAB<rc>TAB<verb>TAB<unit>TAB<seconds>.
+
+    One line per completed run, oldest first. A short or malformed line is
+    skipped rather than allowed to break the dashboard, because the history is
+    evidence for a human and one bad line must not hide the rest. The JSON
+    window is the last `limit` runs; the page shows the last five.
+    """
+    try:
+        lines = open(os.path.join(st, "runs.tsv"), errors="replace").read().splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) < 6:
+            continue
+        try:
+            out.append({
+                "start": parts[0],
+                "end": parts[1],
+                "rc": int(parts[2]),
+                "verb": parts[3],
+                "unit": parts[4],
+                "seconds": int(parts[5]),
+            })
+        except ValueError:
+            continue
+    return out[-limit:]
+
+
+def duration_text(seconds):
+    """Render a run's seconds the way the page reads it: 7s, 1m 03s, or —."""
+    if seconds is None:
+        return "—"
+    minutes, secs = divmod(max(0, int(seconds)), 60)
+    return f"{minutes}m {secs:02d}s" if minutes else f"{secs}s"
+
+
+def runs_html(history):
+    """The last five runs as one cell, newest first."""
+    recent = history[-5:]
+    if not recent:
+        return "—"
+    return "<br>".join(
+        f"<span class='run'>{r['end'][5:16].replace('T', ' ')} "
+        f"{r['verb']} rc {r['rc']} {duration_text(r['seconds'])}</span>"
+        for r in reversed(recent))
+
+
 def job_state(name):
     d = os.path.join(REPO, "jobs", name)
     st = os.path.join(d, "state")
@@ -116,6 +166,8 @@ def job_state(name):
         "spend_today": 0,
         "last_exit": None,
         "last_run": None,
+        "last_duration": None,
+        "runs": [],
         "out_files": 0,
         "expect": None,
         "stale": False,
@@ -133,6 +185,11 @@ def job_state(name):
             parts = rows[-1].split("\t")
             if len(parts) >= 3:
                 rec["last_run"], rec["last_exit"] = parts[0], int(parts[1])
+    # The history is the same completed runs state/last records, with the
+    # duration each one took; the JSON carries the last ten, the page five.
+    rec["runs"] = run_history(st)
+    if rec["runs"]:
+        rec["last_duration"] = rec["runs"][-1]["seconds"]
     done = os.path.join(st, "done")
     done_today = os.path.isdir(done) and today in os.listdir(done)
     if done_today:
@@ -197,8 +254,11 @@ def main(argv):
             f"<tr class='{r['state'].replace(' ', '-')}'>"
             f"<td><b>{r['name']}</b></td><td>{r['state']}</td>"
             f"<td>{r['detail']}</td><td>{r['stage'] or '—'}</td>"
-            f"<td>{r['last_run'] or '—'}</td><td>{r['attempts_today']}</td></tr>"
-            for r in data) or "<tr><td colspan=6>no jobs yet</td></tr>"
+            f"<td>{r['last_run'] or '—'}</td>"
+            f"<td>{duration_text(r['last_duration'])}</td>"
+            f"<td>{runs_html(r['runs'])}</td>"
+            f"<td>{r['attempts_today']}</td></tr>"
+            for r in data) or "<tr><td colspan=8>no jobs yet</td></tr>"
         page = f"""<!doctype html><meta charset=utf-8>
 <title>LightsOut</title>
 <style>
@@ -208,9 +268,10 @@ th,td{{text-align:left;padding:.5rem .75rem;border-bottom:1px solid #e5e5e5;vert
 th{{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:#666}}
 tr.blocked{{background:#fdeceb}} tr.blocked td:nth-child(2){{color:#b42318;font-weight:600}}
 tr.running{{background:#fff8e6}} tr.done-today td:nth-child(2){{color:#087443}}
+span.run{{font-size:.85rem;color:#555}}
 caption{{text-align:left;font-weight:600;margin-bottom:.75rem}}
 </style><table><caption>LightsOut — {time.strftime('%Y-%m-%d %H:%M')}</caption>
-<tr><th>job</th><th>state</th><th>why</th><th>stage</th><th>last run</th><th>attempts</th></tr>
+<tr><th>job</th><th>state</th><th>why</th><th>stage</th><th>last run</th><th>duration</th><th>last 5 runs</th><th>attempts</th></tr>
 {rows}</table>"""
         os.makedirs(os.path.dirname(os.path.abspath(args.html)), exist_ok=True)
         open(args.html, "w").write(page)

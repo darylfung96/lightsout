@@ -100,12 +100,35 @@ registered_repairs() {
     | sed 's/ *$//'
 }
 
+# record <verb> <rc> — one line per completed run. state/last keeps the last 50
+# lines the stale check reads; state/runs.tsv is the same history with the
+# duration, because a scheduler's tick is not the job's run. state/start is
+# written by run_job before the job execs, so the seconds are the job's own and
+# not the wrapper's. A missing start file (an older run, or a hand-written
+# history) falls back to a zero-second run rather than a broken line.
 record() { # record <verb> <rc>
-  local f="$STATE/last"
+  local verb="$1" rc="$2" f="$STATE/last" start="" start_epoch="" end end_epoch
+  local seconds unit
+  end=$(date -Iseconds)
+  end_epoch=$(date +%s)
+  if [ -f "$STATE/start" ]; then
+    IFS=$'\t' read -r start start_epoch < "$STATE/start" || true
+  fi
+  case "${start_epoch:-}" in
+    ''|*[!0-9]*) start_epoch=$end_epoch ;;
+  esac
+  [ -n "${start:-}" ] || start=$end
+  seconds=$((end_epoch - start_epoch))
+  [ "$seconds" -ge 0 ] || seconds=0
+  # one line per run: a tab or newline in a field would corrupt the TSV
+  unit="${UNIT:-unknown}"
+  unit="${unit//$'\t'/ }"; unit="${unit//$'\n'/ }"
   { cat "$f" 2>/dev/null || true
-    printf '%s\t%s\t%s\n' "$(date -Iseconds)" "$2" "$1"
+    printf '%s\t%s\t%s\n' "$end" "$rc" "$verb"
   } | tail -50 > "$f.tmp"
   mv "$f.tmp" "$f"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$start" "$end" "$rc" "$verb" "$unit" "$seconds" >> "$STATE/runs.tsv"
 }
 
 # --- stale-run check -----------------------------------------------------
@@ -188,6 +211,12 @@ run_job() { # run_job <name> <verb> <dry>
       printf '  fix the cause, then: bin/job unblock %s\n' "$JOB"
     fi
     exit 2
+  fi
+  # The start line is the job's own clock: record() subtracts it after the job
+  # returns, so a held, failed or blocked run gets its real duration. plan never
+  # writes it, because plan touches nothing.
+  if [ "$dry" = 0 ]; then
+    printf '%s\t%s\n' "$(date -Iseconds)" "$(date +%s)" > "$STATE/start"
   fi
   DRY="$dry" bash "$JOB_DIR/job.sh" || rc=$?
   if [ "$dry" = 0 ]; then record "$verb" "$rc"; fi

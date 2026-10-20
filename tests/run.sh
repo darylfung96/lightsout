@@ -440,6 +440,72 @@ rm -f "$NOTIFY_LOG"
 rm -rf "$stub"
 unset NOTIFY_LOG
 
+# 17 — run history: every completed run is one line with its own duration, the
+# page shows the last five, and the JSON window is the last ten (Task 8)
+reset
+bin/job status --all --json | python3 -c '
+import json, sys
+r = [x for x in json.load(sys.stdin) if x["name"] == "noop"][0]
+assert r["runs"] == [] and r["last_duration"] is None, r
+' && echo "ok   a job with no runs has an empty history" \
+  || { echo "FAIL empty history"; fails=$((fails + 1)); }
+
+reset
+bin/job run noop >/dev/null 2>&1
+bin/job run noop >/dev/null 2>&1
+n=$(wc -l < jobs/noop/state/runs.tsv 2>/dev/null | tr -d ' ')
+check "two runs recorded" 2 "$n"
+check "a run line has six fields" 6 \
+  "$(awk -F'\t' 'NR==1{print NF}' jobs/noop/state/runs.tsv 2>/dev/null)"
+check "the held run is in the history too" 0 \
+  "$(awk -F'\t' 'NR==2{print $3}' jobs/noop/state/runs.tsv 2>/dev/null)"
+check "a run records its verb and unit" "run|$(date +%F)" \
+  "$(awk -F'\t' 'NR==1{print $4"|"$5}' jobs/noop/state/runs.tsv 2>/dev/null)"
+bin/job status --all --json | python3 -c '
+import json, sys
+r = [x for x in json.load(sys.stdin) if x["name"] == "noop"][0]
+assert len(r["runs"]) == 2, r["runs"]
+first, last = r["runs"]
+assert first["verb"] == "run" and first["rc"] == 0, first
+assert first["start"].startswith("20") and first["end"].startswith("20"), first
+assert isinstance(first["seconds"], int) and first["seconds"] >= 0, first
+assert last["seconds"] == r["last_duration"], (last, r["last_duration"])
+' && echo "ok   status --json parses runs with durations" \
+  || { echo "FAIL status --json runs"; fails=$((fails + 1)); }
+
+# a retry is its own run, and the run that blocked stays in the history
+reset
+NOOP_BLOCK=1 NOOP_CLASS=retryable bin/job run noop >/dev/null 2>&1
+bin/job retry noop >/dev/null 2>&1
+check "a blocked run keeps its exit in the history" 2 \
+  "$(awk -F'\t' 'NR==1{print $3}' jobs/noop/state/runs.tsv 2>/dev/null)"
+check "a retry is recorded as its own verb" retry \
+  "$(awk -F'\t' 'END{print $4}' jobs/noop/state/runs.tsv 2>/dev/null)"
+
+# the JSON window is the last ten; the page keeps the duration and the last five
+reset
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do bin/job run noop >/dev/null 2>&1; done
+check "runs.tsv keeps every completed run" 12 \
+  "$(wc -l < jobs/noop/state/runs.tsv 2>/dev/null | tr -d ' ')"
+bin/job status --all --json | python3 -c '
+import json, sys
+r = [x for x in json.load(sys.stdin) if x["name"] == "noop"][0]
+rows = [l.split("\t") for l in open("jobs/noop/state/runs.tsv").read().splitlines()]
+assert len(r["runs"]) == 10, len(r["runs"])
+for row, run in zip(rows[-10:], r["runs"]):
+    assert (run["start"], run["end"], run["rc"], run["verb"], run["unit"], run["seconds"]) \
+        == (row[0], row[1], int(row[2]), row[3], row[4], int(row[5])), (row, run)
+assert r["last_duration"] == int(rows[-1][5]), (r["last_duration"], rows[-1])
+' && echo "ok   the last ten runs are parsed oldest first" \
+  || { echo "FAIL run history window"; fails=$((fails + 1)); }
+bin/report --html /tmp/lightsout-history.html >/dev/null
+grep -q '<th>duration</th>' /tmp/lightsout-history.html
+check "the page names the duration" 0 "$?"
+grep -q '<th>last 5 runs</th>' /tmp/lightsout-history.html
+check "the page names the last 5 runs" 0 "$?"
+check "the page renders five recent runs" 5 \
+  "$(grep -o "class='run'" /tmp/lightsout-history.html | wc -l | tr -d ' ')"
+
 reset
 echo
 if [ "$fails" -eq 0 ]; then echo "all checks passed"; else echo "$fails check(s) failed"; exit 1; fi

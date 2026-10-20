@@ -60,6 +60,8 @@ state/
   diagnosis.md        read-only report from `job diagnose`; the block is its input, not its output
   repairs/<date>.count repairs run today; `MAX_REPAIRS` (default 2) caps the loop
   last                <iso>TAB<exit code>TAB<verb>
+  start               <iso>TAB<epoch> written before the job runs, so the history has the job's own clock
+  runs.tsv            <start-iso>TAB<end-iso>TAB<rc>TAB<verb>TAB<unit>TAB<seconds>, one line per completed run
   expect              one line, HH:MM local: the time a run is due
   alerts/<date>.stale the stale alarm for this job was raised today
 ```
@@ -120,6 +122,29 @@ notified when it was raised, but `check` exits `2` for a blocked job that missed
 its run: the scheduler keeps seeing a non-zero state without a notification every
 tick. `check` reads and notifies; it never runs a job, because an alarm that
 repaired would be a second runner.
+
+## Run history
+
+`state/last` holds the last 50 completed runs as `<iso>TAB<rc>TAB<verb>`,
+because the stale check needs only the newest line. `state/runs.tsv` writes the
+same event with a duration, one line per completed run:
+`<start-iso>TAB<end-iso>TAB<rc>TAB<verb>TAB<unit>TAB<seconds>`. A held run, a
+failed run and a retry are appended the same way as a success, because the
+history is a record of what the scheduler did, not only of the work that
+finished.
+
+Before it execs the job, `bin/job` writes `state/start` as `<iso>TAB<epoch>`,
+and `record` subtracts that start from the clock when the job returns. Timing
+the whole `bin/job` process instead would turn a fast held tick into a slow run
+and hide the job's own time. A missing or unreadable start line records zero
+seconds so that one damaged file cannot remove a run from the history.
+
+`status --json` reports the last ten runs as `runs`, oldest first, each with
+`start`, `end`, `rc`, `verb`, `unit` and `seconds`, plus the newest run's
+integer `last_duration` (or `null` before the first run). The HTML table from
+`bin/report --html` adds `duration` and `last 5 runs`, because the page is read
+by a person scanning for a run that got slower and the file keeps the full
+history.
 
 ## Notifications
 
