@@ -31,6 +31,13 @@ print([r for r in json.load(sys.stdin) if r["name"]=="noop"][0]["stale"])'
 # log the notifier appends to, so repeated test runs do not confuse the count.
 stale_alerts() { awk '/noop stale/' logs/alerts.log 2>/dev/null | wc -l | tr -d ' '; }
 
+# blocked_alerts — block notifications for the fixture recorded so far. The
+# alert file outlives one test run, so a check compares before and after.
+blocked_alerts() {
+  [ -f logs/alerts.log ] || { echo 0; return; }
+  awk '/noop blocked/ { n++ } END { print n + 0 }' logs/alerts.log
+}
+
 # 1 — a fresh run finishes and writes its marker
 reset
 bin/job run noop >/dev/null 2>&1; check "fresh run exits 0" 0 "$?"
@@ -368,6 +375,70 @@ bin/job run noop >/dev/null 2>&1
 rm -rf jobs/noop/state/lock
 NOOP_BLOCK=1 bin/job run noop >/dev/null 2>&1
 bin/job check >/dev/null 2>&1; check "a hold does not mask a later block" 2 "$?"
+
+# 16 — notifications: each configured channel is tried, the alert file always
+# records the event, and no channel can fail the job (Task 7)
+notify_stubs() { # notify_stubs — a PATH whose osascript and curl record their args
+  local d
+  d=$(mktemp -d "${TMPDIR:-/tmp}/lightsout-notify.XXXXXX") || return 1
+  for c in osascript curl; do
+    cat > "$d/$c" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >> "${NOTIFY_LOG:-/dev/null}"
+STUB
+    chmod +x "$d/$c"
+  done
+  printf '%s\n' "$d"
+}
+
+reset
+stub=$(notify_stubs)
+NOTIFY_LOG=/tmp/lightsout-notify
+export NOTIFY_LOG
+rm -f "$NOTIFY_LOG"
+before=$(blocked_alerts)
+NOOP_BLOCK=1 U_NOTIFY=1 U_NOTIFY_CMD='printf "%s|%s\n" >> /tmp/lightsout-notify' \
+  U_NOTIFY_WEBHOOK='http://example.invalid/hook' PATH="$stub:$PATH" \
+  bin/job run noop >/dev/null 2>&1
+check "channels do not change the verdict" 2 "$?"
+grep -q "LightsOut: noop blocked|simulated gate failure" "$NOTIFY_LOG"
+check "the command channel gets the title and the body" 0 "$?"
+grep -q "display notification" "$NOTIFY_LOG"
+check "the desktop channel falls back through osascript" 0 "$?"
+grep -q "http://example.invalid/hook" "$NOTIFY_LOG"
+check "the webhook channel fires" 0 "$?"
+grep -q '"body": "simulated gate failure' "$NOTIFY_LOG"
+check "the webhook carries the block as JSON" 0 "$?"
+check "the alert is recorded once" 1 "$(( $(blocked_alerts) - before ))"
+
+reset
+rm -f "$NOTIFY_LOG"
+before=$(blocked_alerts)
+NOOP_BLOCK=1 U_NOTIFY=0 U_NOTIFY_CMD='printf "%s|%s\n" >> /tmp/lightsout-notify' \
+  U_NOTIFY_WEBHOOK='http://example.invalid/hook' PATH="$stub:$PATH" \
+  bin/job run noop >/dev/null 2>&1
+check "a silenced notification still blocks" 2 "$?"
+[ -f "$NOTIFY_LOG" ]; check "U_NOTIFY=0 silences every channel" 1 "$?"
+check "a silenced notification is still recorded" 1 "$(( $(blocked_alerts) - before ))"
+
+reset
+NOOP_BLOCK=1 U_NOTIFY=1 U_NOTIFY_CMD=false PATH="$stub:$PATH" \
+  bin/job run noop >/dev/null 2>&1
+check "a failing channel does not fail the job" 2 "$?"
+[ -f jobs/noop/state/blocked ]; check "a failing channel keeps the block" 0 "$?"
+
+reset
+t0=$(date +%s)
+NOOP_BLOCK=1 U_NOTIFY=1 U_NOTIFY_CMD='sleep 30; :' PATH="$stub:$PATH" \
+  bin/job run noop >/dev/null 2>&1
+check "a hanging channel does not change the verdict" 2 "$?"
+elapsed=$(( $(date +%s) - t0 ))
+[ "$elapsed" -ge 4 ] && [ "$elapsed" -lt 15 ]
+check "a hanging channel is cut off at 5s, not at its own pace (${elapsed}s)" 0 "$?"
+
+rm -f "$NOTIFY_LOG"
+rm -rf "$stub"
+unset NOTIFY_LOG
 
 reset
 echo

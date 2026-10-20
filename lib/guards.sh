@@ -11,17 +11,10 @@ u_say() {
 u_held()  { u_say "held: $*"; exit 0; }
 u_die()   { u_say "FATAL: $*"; exit 1; }
 
-u_notify() {
-  local title="$1" body="$2"
-  printf '%s\t%s\t%s\n' "$(date -Iseconds)" "$title" "$body" >> "$U_ALERTS"
-  if [ "${U_NOTIFY:-1}" = 0 ]; then
-    u_say "notify suppressed: $title — $body"
-    return 0
-  fi
-  if [ -x /usr/bin/osascript ]; then
-    /usr/bin/osascript -e "display notification \"${body//\"/\\\"}\" with title \"${title//\"/\\\"}\"" >/dev/null 2>&1 || true
-  fi
-}
+# u_notify lives in lib/notify.sh: the channel list and its timeouts are one
+# file, so an alarm raised by `bin/job check` and a block raised by a job reach
+# the same places (docs/run-contract.md).
+. "$REPO/lib/notify.sh"
 
 # blocked = retrying will not fix it. One notification, then quiet persistence.
 # state/blocked is TSV <iso>TAB<class>TAB<source>TAB<reason>; the class decides

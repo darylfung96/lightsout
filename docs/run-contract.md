@@ -121,6 +121,18 @@ its run: the scheduler keeps seeing a non-zero state without a notification ever
 tick. `check` reads and notifies; it never runs a job, because an alarm that
 repaired would be a second runner.
 
+## Notifications
+
+`u_notify <title> <body>` (`lib/notify.sh`) is where a job and `check` both send
+notifications, because one file keeps the channel list and its deadlines honest.
+It appends `<iso>TAB<title>TAB<body>` to `$U_ALERTS` (`logs/alerts.log`) first,
+then tries each configured channel with a 5-second timeout: `U_NOTIFY_CMD` as a
+shell command with the title and body appended as arguments, `U_NOTIFY_WEBHOOK`
+as a JSON POST, and the desktop through `osascript`. A channel that fails or
+hangs is forgotten, and no notification ever fails a job — the exit codes stay a
+statement about the work. `U_NOTIFY=0` silences the channels but still records
+the alert line, so a quiet run keeps the same record as a noisy one.
+
 ## Log lines
 
 One line per decision, timestamped, appended to `$LOG` and echoed to stdout:
