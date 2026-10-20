@@ -166,7 +166,7 @@ def reason_bullets(blk):
 
 def registered_repairs():
     body = read(os.path.join(REPO, "lib", "repairs.sh"))
-    return re.findall(r"^repair_([A-Za-z0-9_]+)\s*\(\)", body, re.M)
+    return re.findall(r"^repair_([A-Za-z0-9_-]+)\s*\(\)", body, re.M)
 
 
 def gate_command(reason):

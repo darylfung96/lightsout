@@ -138,6 +138,76 @@ reset
 bin/job diagnose noop >/dev/null 2>&1; check "diagnose works when not blocked" 0 "$?"
 grep -qi "not blocked" jobs/noop/state/diagnosis.md; check "unblocked diagnosis says so" 0 "$?"
 
+# 11 — retry is an allowlist: a retryable block, a registered repair, no verdict
+reset
+NOOP_BLOCK=1 NOOP_CLASS=retryable bin/job run noop >/dev/null 2>&1
+bin/job retry noop >/dev/null 2>&1; check "retry runs after a retryable block" 0 "$?"
+[ -f "jobs/noop/state/done/$(date +%F)" ]; check "retry re-runs the job to done" 0 "$?"
+[ -f jobs/noop/state/blocked ]; check "retry cleared the block on success" 1 "$?"
+check "one repair counted" 1 "$(cat "jobs/noop/state/repairs/$(date +%F).count" 2>/dev/null)"
+grep -q "retry: repair touch-missing" "jobs/noop/logs/$(date +%F).log"
+check "the repair is logged by name" 0 "$?"
+case "$(tail -1 jobs/noop/state/last)" in
+  *$'\t'0$'\t'retry) echo "ok   retry is recorded as its own verb" ;;
+  *) echo "FAIL retry not recorded: $(tail -1 jobs/noop/state/last)"; fails=$((fails + 1)) ;;
+esac
+
+reset
+NOOP_BLOCK=1 NOOP_CLASS=human bin/job run noop >/dev/null 2>&1
+bin/job retry noop >/dev/null 2>&1; check "retry refuses a human block" 2 "$?"
+[ -f jobs/noop/state/blocked ]; check "refused retry keeps the block" 0 "$?"
+[ -d jobs/noop/state/repairs ]; check "refused retry runs no repair" 1 "$?"
+out=$(bin/job retry noop 2>&1)
+case "$out" in
+  *"diagnosis.md"*) echo "ok   refusal points at the diagnosis" ;;
+  *) echo "FAIL refusal does not point at the diagnosis: $out"; fails=$((fails + 1)) ;;
+esac
+
+reset
+NOOP_BLOCK=1 NOOP_CLASS=judgment bin/job run noop >/dev/null 2>&1
+bin/job retry noop >/dev/null 2>&1; check "retry refuses a judgment block" 2 "$?"
+
+reset
+NOOP_BLOCK=1 NOOP_CLASS=retryable bin/job run noop >/dev/null 2>&1
+before=$(find jobs/noop/state -type f | wc -l | tr -d ' ')
+out=$(bin/job retry noop --repair does-not-exist 2>&1); rc=$?
+check "retry refuses an unknown repair" 2 "$rc"
+after=$(find jobs/noop/state -type f | wc -l | tr -d ' ')
+check "unknown repair touches no state" "$before" "$after"
+case "$out" in
+  *"touch-missing"*) echo "ok   unknown repair lists the allowlist" ;;
+  *) echo "FAIL unknown repair does not list the allowlist: $out"; fails=$((fails + 1)) ;;
+esac
+
+reset
+bin/job retry noop >/dev/null 2>&1; check "retry with nothing blocked is a held no-op" 0 "$?"
+[ -d jobs/noop/state/repairs ]; check "no repair ran without a block" 1 "$?"
+
+reset
+NOOP_BLOCK=1 NOOP_CLASS=retryable bin/job run noop >/dev/null 2>&1
+NOOP_BLOCK=1 NOOP_CLASS=retryable bin/job retry noop >/dev/null 2>&1
+check "a repair cannot launder a bad artifact" 2 "$?"
+[ -f jobs/noop/state/blocked ]; check "a failing retry is blocked again" 0 "$?"
+
+reset
+NOOP_BLOCK=1 bin/job run noop --class retryable >/dev/null 2>&1
+bin/job diagnose noop >/dev/null 2>&1; check "diagnose on a retryable block exits 0" 0 "$?"
+grep -q "touch-missing" jobs/noop/state/diagnosis.md; check "diagnose lists the registered repair" 0 "$?"
+
+reset
+NOOP_BLOCK=1 NOOP_CLASS=retryable bin/job run noop >/dev/null 2>&1
+NOOP_BLOCK=1 NOOP_CLASS=retryable MAX_ATTEMPTS=99 MAX_REPAIRS=2 bin/job retry noop >/dev/null 2>&1
+check "first retry under the cap runs" 2 "$?"
+NOOP_BLOCK=1 NOOP_CLASS=retryable MAX_ATTEMPTS=99 MAX_REPAIRS=2 bin/job retry noop >/dev/null 2>&1
+check "second retry under the cap runs" 2 "$?"
+out=$(NOOP_BLOCK=1 NOOP_CLASS=retryable MAX_ATTEMPTS=99 MAX_REPAIRS=2 bin/job retry noop 2>&1); rc=$?
+check "repair cap blocks the third retry" 2 "$rc"
+case "$out" in
+  *"repair cap"*) echo "ok   repair cap is reported" ;;
+  *) echo "FAIL repair cap not reported: $out"; fails=$((fails + 1)) ;;
+esac
+check "two repairs recorded today" 2 "$(cat "jobs/noop/state/repairs/$(date +%F).count" 2>/dev/null)"
+
 reset
 echo
 if [ "$fails" -eq 0 ]; then echo "all checks passed"; else echo "$fails check(s) failed"; exit 1; fi

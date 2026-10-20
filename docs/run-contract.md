@@ -10,6 +10,7 @@ Every job in `jobs/` implements this interface and nothing invents its own.
 | `job run <name>` | do the work, resuming from disk | 0 / 1 / 2 |
 | `job status [name]` | describe state from files | 0 |
 | `job diagnose <name>` | explain the current stop from files; writes `state/diagnosis.md`, changes nothing else | 0 |
+| `job retry <name>` | run an allowlisted repair for a `retryable` block, then the job again so the same gate decides | 0 / 1 / 2 |
 | `job resume <name>` | identical to `run`; kept as a word for humans | 0 / 1 / 2 |
 | `job unblock <name>` | clear a blocked marker, after a human looks | 0 |
 
@@ -56,6 +57,7 @@ state/
   done/<unit>         this unit finished; the day guard reads it
   blocked             <iso>TAB<class>TAB<source>TAB<reason> — one line, current reason only
   diagnosis.md        read-only report from `job diagnose`; the block is its input, not its output
+  repairs/<date>.count repairs run today; `MAX_REPAIRS` (default 2) caps the loop
   last                <iso>TAB<exit code>TAB<verb>
 ```
 
@@ -72,6 +74,21 @@ decision). `source` names what raised the block and defaults to `unknown`. A
 two-field line written by an older run reads as `human` with field 2 as the
 reason. `bin/job run` and `resume` accept `--class C --source S` to set the
 default for every block raised during that run.
+
+A repair runs through `job retry` after two checks, because a repair executes
+with the job's privileges: the block's class must be `retryable`, and the
+requested name must be defined as `repair_<name>()` in `lib/repairs.sh`. The
+registry has to be reviewable for the same reason, so an unknown name exits `2`
+and touches nothing; every class other than `retryable` is refused the same way,
+because a `judgment` block needs an edited artifact before anything re-runs.
+Repairs are counted in `state/repairs/<date>.count`, and `MAX_REPAIRS` (default
+2) stops the loop that a repair which never fixes anything would otherwise
+create. `--repair R` chooses a registered repair; the default is `touch-missing`
+(the noop fixture's repair, also settable with `NOOP_REPAIR`). A repair may
+change the world but never the verdict, because only the gate that rejected the
+artifact may pass it: the retry leaves `state/blocked` in place, re-runs the
+job, and the marker stays until the job passes and `u_done` clears it or blocks
+again.
 
 `done/<unit>` is the notebook: a restarted job asks "is my output already on
 disk?" and skips. It is the single most important file in the directory, and

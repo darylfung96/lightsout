@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# job — plan | run | status | diagnose | resume | unblock | list. Contract: docs/run-contract.md
+# job — plan | run | status | diagnose | retry | resume | unblock | list.
+# Contract: docs/run-contract.md
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 
@@ -15,6 +16,10 @@ usage: job <verb> [name]
   run <name> [--class C] [--source S]
                        do the work, resuming from disk; C defaults every block
                        raised in this run (retryable|judgment|human)
+  retry <name> [--repair R]
+                       run the allowlisted repair R (default touch-missing)
+                       for a retryable block, then the job again so the same
+                       gate decides; capped by MAX_REPAIRS (default 2)
   resume <name>        same as run
   unblock <name>       clear a blocked marker after a human looks
 
@@ -71,6 +76,28 @@ diagnose_env() {
   export REPO JOB JOB_DIR STATE OUT LOG UNIT DRY
 }
 
+# retry_env — paths for retry, but creates nothing: a refused retry must touch
+# nothing at all (docs/run-contract.md).
+retry_env() {
+  JOB="$1"
+  JOB_DIR="$REPO/jobs/$JOB"
+  [ -f "$JOB_DIR/job.sh" ] || { echo "no such job: $JOB" >&2; exit 64; }
+  STATE="$JOB_DIR/state"
+  OUT="$JOB_DIR/out"
+  LOG="$JOB_DIR/logs/$(date +%F).log"
+  UNIT="${UNIT:-$(date +%F)}"
+  DRY=0
+  U_ALERTS="$REPO/logs/alerts.log"
+  export REPO JOB JOB_DIR STATE OUT LOG UNIT U_ALERTS DRY
+}
+
+# registered_repairs — the allowlist, read from the functions lib/repairs.sh
+# defines. Nothing else can be named through `job retry`.
+registered_repairs() {
+  declare -F | awk '{print $3}' | sed -n 's/^repair_//p' | sort | tr '\n' ' ' \
+    | sed 's/ *$//'
+}
+
 record() { # record <verb> <rc>
   local f="$STATE/last"
   { cat "$f" 2>/dev/null || true
@@ -85,7 +112,10 @@ run_job() { # run_job <name> <verb> <dry>
   U_BLOCK_CLASS="${U_BLOCK_CLASS:-human}"
   U_BLOCK_SOURCE="${U_BLOCK_SOURCE:-unknown}"
   export U_BLOCK_CLASS U_BLOCK_SOURCE
-  if [ "$dry" = 0 ] && [ -f "$STATE/blocked" ]; then
+  # Only a pass (u_done) or a human (unblock) clears state/blocked, so a retry
+  # re-runs the job with the marker still in place; U_RETRYING is set by the
+  # retry verb, and the job's own gates and guards decide the new verdict.
+  if [ "$dry" = 0 ] && [ -f "$STATE/blocked" ] && [ "${U_RETRYING:-0}" != 1 ]; then
     local fields iso cls src reason
     fields=$(blocked_fields "$STATE/blocked")
     IFS=$'\t' read -r iso cls src reason <<< "$fields"
@@ -122,6 +152,75 @@ case "$cmd" in
     python3 "$REPO/lib/diagnose.py" "$JOB_DIR" \
       || { echo "diagnose failed for $JOB" >&2; exit 1; }
     cat "$STATE/diagnosis.md" ;;
+
+  retry)
+    [ -n "${1:-}" ] || { usage; exit 64; }
+    name="$1"; shift
+    repair="${NOOP_REPAIR:-touch-missing}"
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --repair)   [ "$#" -ge 2 ] || { echo "--repair needs a value" >&2; exit 64; }
+                    repair="$2"; shift 2 ;;
+        --repair=*) repair="${1#*=}"; shift ;;
+        *) echo "unknown option: $1" >&2; usage; exit 64 ;;
+      esac
+    done
+    retry_env "$name"
+    if [ ! -f "$STATE/blocked" ]; then
+      echo "$JOB is not blocked; nothing to retry"
+      exit 0
+    fi
+    # The class is the permission to retry: retryable means an allowlisted
+    # repair may clear the cause, anything else needs a human first.
+    fields=$(blocked_fields "$STATE/blocked")
+    IFS=$'\t' read -r iso cls src reason <<< "$fields"
+    if [ "$cls" != retryable ]; then
+      printf 'refusing to retry %s: class %s is not retryable\n' "$JOB" "$cls"
+      printf '  the block is the record; read: bin/job diagnose %s\n' "$JOB"
+      printf '  report: %s\n' "$STATE/diagnosis.md"
+      exit 2
+    fi
+    [ -f "$REPO/lib/repairs.sh" ] || {
+      echo "refusing to retry: no repair registry at lib/repairs.sh" >&2
+      exit 2
+    }
+    . "$REPO/lib/repairs.sh"
+    # The allowlist is the registry, so a name can never reach an arbitrary command.
+    if ! declare -F "repair_$repair" >/dev/null 2>&1; then
+      allowed=$(registered_repairs)
+      printf 'refusing unknown repair: %s\n' "$repair"
+      printf '  allowlisted: %s\n' "${allowed:-none}"
+      exit 2
+    fi
+    max="${MAX_REPAIRS:-2}"
+    case "$max" in
+      ''|*[!0-9]*) echo "MAX_REPAIRS must be a whole number" >&2; exit 64 ;;
+    esac
+    count_file="$STATE/repairs/$(date +%F).count"
+    n=0
+    if [ -f "$count_file" ]; then
+      n=$(tr -dc '0-9' < "$count_file")
+      n="${n:-0}"
+    fi
+    if [ "$n" -ge "$max" ]; then
+      printf 'repair cap reached (%s of %s today) for %s\n' "$n" "$max" "$JOB"
+      printf '  the next repair needs a human: bin/job diagnose %s\n' "$JOB"
+      exit 2
+    fi
+    mkdir -p "$STATE/repairs" "$JOB_DIR/logs"
+    printf '%s\n' "$((n + 1))" > "$count_file"
+    . "$REPO/lib/guards.sh"   # u_say: the retry lands in the job's own log
+    u_say "retry: repair $repair ($((n + 1)) of $max today)"
+    if "repair_$repair"; then
+      u_say "retry: repair $repair done; rerunning $JOB so the gate decides"
+    else
+      u_say "retry: repair $repair failed; the block stands"
+      exit 1
+    fi
+    # Re-run the whole job. The marker stays until u_done or unblock clears it,
+    # so this is a re-check, not a verdict: every guard and gate runs again.
+    U_RETRYING=1
+    run_job "$name" retry 0 ;;
 
   run|resume)
     [ -n "${1:-}" ] || { usage; exit 64; }

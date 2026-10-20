@@ -16,7 +16,10 @@ u_sh "stage 1: write artifact" stage_write
 u_gate exists --file "$OUT/hello.txt"
 
 if [ "${NOOP_BLOCK:-0}" = 1 ]; then
-  u_block "simulated gate failure (NOOP_BLOCK=1)"
+  # NOOP_CLASS lets the fixture raise each class; the allowlisted repair for it
+  # is touch-missing (lib/repairs.sh), which `bin/job retry noop` runs.
+  u_block --class "${NOOP_CLASS:-${U_BLOCK_CLASS:-human}}" \
+          "simulated gate failure (NOOP_BLOCK=1)"
 fi
 
 u_say "stage 2: memory pass"
