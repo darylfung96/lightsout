@@ -9,6 +9,7 @@ Every job in `jobs/` implements this interface and nothing invents its own.
 | `job plan <name>` | say what would run now; touch nothing | 0 |
 | `job run <name>` | do the work, resuming from disk | 0 / 1 / 2 |
 | `job status [name]` | describe state from files | 0 |
+| `job diagnose <name>` | explain the current stop from files; writes `state/diagnosis.md`, changes nothing else | 0 |
 | `job resume <name>` | identical to `run`; kept as a word for humans | 0 / 1 / 2 |
 | `job unblock <name>` | clear a blocked marker, after a human looks | 0 |
 
@@ -54,8 +55,15 @@ state/
   attempts/<date>.attempt-N
   done/<unit>         this unit finished; the day guard reads it
   blocked             <iso>TAB<class>TAB<source>TAB<reason> — one line, current reason only
+  diagnosis.md        read-only report from `job diagnose`; the block is its input, not its output
   last                <iso>TAB<exit code>TAB<verb>
 ```
+
+`lib/diagnose.py` reads the blocked line, the log up to the block, and `out/`,
+then writes `state/diagnosis.md` and exits `0` even while the job stays blocked,
+so a human can read what happened without disturbing the stop. Because only a
+human (`unblock`) or a passing run (`u_done`) may clear the marker, diagnose
+never clears it and never runs a repair; its report is the only file it writes.
 
 The blocked line's class says what may be done about it: `retryable` (an
 allowlisted repair may fix it, so `job retry` is offered), `judgment` (a human

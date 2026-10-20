@@ -111,6 +111,33 @@ case "$out" in
   *) echo "FAIL human hint missing: $out"; fails=$((fails + 1)) ;;
 esac
 
+# 10 — diagnose explains a block without changing a byte of it
+reset
+NOOP_BLOCK=1 bin/job run noop >/dev/null 2>&1
+printf '[%s] FAIL exists: simulated gate failure\n' "$(date '+%F %T')" >> "jobs/noop/logs/$(date +%F).log"
+before=$(md5 -q jobs/noop/state/blocked)
+bin/job diagnose noop >/dev/null; check "diagnose exits 0" 0 "$?"
+after=$(md5 -q jobs/noop/state/blocked)
+check "diagnose leaves the block untouched" "$before" "$after"
+[ -s jobs/noop/state/diagnosis.md ]; check "diagnosis written" 0 "$?"
+for section in "Cause candidates" "Evidence" "Next commands"; do
+  grep -q "^## $section" jobs/noop/state/diagnosis.md
+  check "diagnosis has a $section section" 0 "$?"
+done
+grep -q "FAIL exists: simulated gate failure" jobs/noop/state/diagnosis.md
+check "diagnosis quotes the last failing gate line" 0 "$?"
+grep -q "stage 1: write artifact" jobs/noop/state/diagnosis.md
+check "diagnosis carries the log tail" 0 "$?"
+grep -q "bin/job unblock noop" jobs/noop/state/diagnosis.md
+check "human block names unblock" 0 "$?"
+out=$(bin/job diagnose noop 2>&1); rc=$?
+check "diagnose prints and exits 0" 0 "$rc"
+case "$out" in *"# Diagnosis"*) echo "ok   diagnosis printed on stdout";; *) echo "FAIL diagnosis not printed"; fails=$((fails + 1));; esac
+bin/job run noop >/dev/null 2>&1; check "diagnose does not clear the block" 2 "$?"
+reset
+bin/job diagnose noop >/dev/null 2>&1; check "diagnose works when not blocked" 0 "$?"
+grep -qi "not blocked" jobs/noop/state/diagnosis.md; check "unblocked diagnosis says so" 0 "$?"
+
 reset
 echo
 if [ "$fails" -eq 0 ]; then echo "all checks passed"; else echo "$fails check(s) failed"; exit 1; fi

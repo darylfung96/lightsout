@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# job — plan | run | status | resume | unblock | list. Contract: docs/run-contract.md
+# job — plan | run | status | diagnose | resume | unblock | list. Contract: docs/run-contract.md
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 
@@ -10,6 +10,8 @@ usage: job <verb> [name]
   list                 jobs that exist
   status [name]        state from files; --json for machines
   plan <name>          what would run now; touches nothing
+  diagnose <name>      read-only report on the current stop; writes
+                       state/diagnosis.md and exits 0 even when blocked
   run <name> [--class C] [--source S]
                        do the work, resuming from disk; C defaults every block
                        raised in this run (retryable|judgment|human)
@@ -52,6 +54,21 @@ job_env() {
   U_ALERTS="$REPO/logs/alerts.log"
   DRY="${DRY:-0}"
   export REPO JOB JOB_DIR STATE OUT LOG UNIT U_ALERTS DRY
+}
+
+# diagnose_env — like job_env, but creates only state/, because the report is the
+# one thing a diagnosis writes (docs/run-contract.md).
+diagnose_env() {
+  JOB="$1"
+  JOB_DIR="$REPO/jobs/$JOB"
+  [ -f "$JOB_DIR/job.sh" ] || { echo "no such job: $JOB" >&2; exit 64; }
+  STATE="$JOB_DIR/state"
+  OUT="$JOB_DIR/out"
+  LOG="$JOB_DIR/logs/$(date +%F).log"
+  UNIT="${UNIT:-$(date +%F)}"
+  DRY=0
+  mkdir -p "$STATE"
+  export REPO JOB JOB_DIR STATE OUT LOG UNIT DRY
 }
 
 record() { # record <verb> <rc>
@@ -98,6 +115,13 @@ case "$cmd" in
   plan)
     [ -n "${1:-}" ] || { usage; exit 64; }
     run_job "$1" plan 1 ;;
+
+  diagnose)
+    [ -n "${1:-}" ] || { usage; exit 64; }
+    diagnose_env "$1"
+    python3 "$REPO/lib/diagnose.py" "$JOB_DIR" \
+      || { echo "diagnose failed for $JOB" >&2; exit 1; }
+    cat "$STATE/diagnosis.md" ;;
 
   run|resume)
     [ -n "${1:-}" ] || { usage; exit 64; }
