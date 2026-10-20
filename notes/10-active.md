@@ -1,22 +1,15 @@
 # Active
 
-What is in flight, so the next session knows where to start. Replace the list;
+What is in flight, so the next session knows where to start. Replace this page;
 do not append to it.
 
 ## Now
 
-- **Scaffolder** (`bin/scaffold`): spec → `jobs/<name>/` with every gate implied
-  by the spec emitted as `gates.py never`, so the job cannot run until the
-  checks exist.
-- **Agent adapter** (`lib/agent.sh`): one wrapper for `dsh headless`, `claude -p`,
-  and `codex exec`, with the prompt file, the gate, and the stage marker in one
-  place instead of copied into each job.
-- **Port the Everyday Laws job** from `video-automation/automation/dsh-daily.sh`
-  to a `jobs/` consumer, to test whether the contract survives contact with a
-  real, expensive pipeline.
+The gap-closing plan is `docs/superpowers/plans/2026-10-20-close-the-gaps.md`,
+14 tasks. Start at Task 1 (failure classification) and work in order; Task 14
+ports the video job and depends on Tasks 10 and 12.
 
-## Known gaps
+## Open questions
 
-- No footage-relevance gate exists anywhere yet; the video job's asset stage
-  ships whatever the API returns.
-- The dashboard shows state but not spend; the agent-step ledger is not wired.
+- Should `job check` be the only stale detector, or should the dashboard compute
+  it too? Both read the same files, so this is a display choice.
