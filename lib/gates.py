@@ -6,6 +6,7 @@ A gate is the only thing allowed to say a step succeeded. Exit 0 pass, 1 fail,
 """
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -88,6 +89,49 @@ def loudness(path="", target=-14.0, tol=1.0, **kw):
     return (abs(lufs - target) <= tol, f"{lufs:.1f} LUFS, want {target}+-{tol}")
 
 
+def manifest(path="", min=0, **kw):
+    """A shot list: every shot approved, and every file present and non-empty.
+
+    The file is JSON, a list of {shot, query, file, approved}. Approval is a
+    human act recorded in that file, so a gate may only read it. The message
+    names the first unapproved shot — or the first approved shot whose file is
+    missing or empty — because that is the shot a human has to act on. A list
+    that is empty, shorter than --min, or unreadable fails closed: a footage
+    stage that produced nothing has not passed (docs/asset-manifest.md).
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            shots = json.load(fh)
+    except OSError as exc:
+        return False, str(exc)
+    except ValueError as exc:
+        return False, f"{path} is not valid JSON: {exc}"
+    if not isinstance(shots, list):
+        return False, f"{path} is not a list of shots"
+    want = int(min)
+    plural = "" if len(shots) == 1 else "s"
+    if len(shots) < want:
+        return False, f"{len(shots)} shot{plural}, want at least {want}"
+    if not shots:
+        return False, f"{path} lists no shots"
+
+    def who(entry, i):
+        query = entry.get("query")
+        label = f"shot {entry.get('shot', i + 1)}"
+        return f"{label} {query!r}" if query else label
+
+    for i, entry in enumerate(shots):
+        if not isinstance(entry, dict):
+            return False, f"shot {i + 1} is not an object"
+        if entry.get("approved") is not True:
+            return False, f"{who(entry, i)} is not approved"
+    for i, entry in enumerate(shots):
+        name = entry.get("file") or ""
+        if not (os.path.isfile(name) and os.path.getsize(name) > 0):
+            return False, f"{who(entry, i)}: {name or 'no file'} is missing or empty"
+    return True, f"{len(shots)} shot{plural} approved"
+
+
 def permalink(url="", **kw):
     req = urllib.request.Request(url, headers={"User-Agent": "lightsout-gate/1"})
     try:
@@ -103,7 +147,8 @@ def never(**kw):
 
 
 GATES = {f.__name__: f for f in
-         (exists, contains, sections, duration, resolution, loudness, permalink, never)}
+         (exists, contains, sections, duration, resolution, loudness, manifest,
+          permalink, never)}
 
 
 def main(argv):

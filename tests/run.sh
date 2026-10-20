@@ -571,6 +571,85 @@ reset
 bin/job plan noop >/dev/null 2>&1
 [ -d jobs/noop/state/resources ]; check "plan takes no resource" 1 "$?"
 
+# 19 — the asset approval gate: a shot list passes only when every shot is
+# approved and every file is on disk, and the message names the first offender
+# (Task 10)
+reset
+bin/job run noop >/dev/null 2>&1
+hello="$PWD/jobs/noop/out/hello.txt"
+shots=$(mktemp -d "${TMPDIR:-/tmp}/lightsout-shots.XXXXXX")
+: > "$shots/empty.mp4"
+
+# the shot an approval step has not reached yet
+printf '[{"shot":1,"query":"staff badge","file":"%s","approved":false}]' "$hello" > /tmp/shots.json
+out=$(lib/gates.py manifest --file /tmp/shots.json --min 1); rc=$?
+check "an unapproved shot fails" 1 "$rc"
+case "$out" in
+  *"shot 1"*"staff badge"*"not approved"*)
+    echo "ok   the failure names the unapproved shot and its query" ;;
+  *) echo "FAIL unapproved shot message: $out"; fails=$((fails + 1)) ;;
+esac
+
+# the same shot, approved, with the file the manifest points at
+printf '[{"shot":1,"query":"staff badge","file":"%s","approved":true}]' "$hello" > /tmp/shots.json
+lib/gates.py manifest --file /tmp/shots.json --min 1 >/dev/null
+check "an approved shot with its file passes" 0 "$?"
+
+# every shot approved but one file missing: approval is not enough
+printf '[{"shot":2,"query":"staff badge","file":"%s/nope.mp4","approved":true}]' "$shots" > /tmp/shots.json
+out=$(lib/gates.py manifest --file /tmp/shots.json --min 1); rc=$?
+check "an approved shot with no file fails" 1 "$rc"
+case "$out" in
+  *"shot 2"*"missing"*) echo "ok   the failure names the missing file" ;;
+  *) echo "FAIL missing file message: $out"; fails=$((fails + 1)) ;;
+esac
+
+printf '[{"shot":3,"query":"staff badge","file":"%s/empty.mp4","approved":true}]' "$shots" > /tmp/shots.json
+lib/gates.py manifest --file /tmp/shots.json --min 1 >/dev/null
+check "an empty shot file fails" 1 "$?"
+
+# the first unapproved shot is the one named, not merely the first entry
+printf '[{"shot":1,"query":"staff badge","file":"%s","approved":true},{"shot":2,"query":"lobby door","file":"%s","approved":false}]' \
+  "$hello" "$hello" > /tmp/shots.json
+out=$(lib/gates.py manifest --file /tmp/shots.json --min 2); rc=$?
+check "one unapproved shot fails a longer manifest" 1 "$rc"
+grep -q "shot 2" <<<"$out"
+check "the message names the first unapproved shot" 0 "$?"
+case "$out" in
+  *"shot 1"*) echo "FAIL message names an approved shot too: $out"; fails=$((fails + 1)) ;;
+  *) echo "ok   the message leaves the approved shot out" ;;
+esac
+
+# a short manifest is a failure even when every entry it has is approved
+printf '[{"shot":1,"query":"staff badge","file":"%s","approved":true}]' "$hello" > /tmp/shots.json
+out=$(lib/gates.py manifest --file /tmp/shots.json --min 2); rc=$?
+check "a manifest short of --min fails" 1 "$rc"
+case "$out" in
+  *"1 shot, want at least 2"*) echo "ok   the failure counts the shots" ;;
+  *) echo "FAIL shot count message: $out"; fails=$((fails + 1)) ;;
+esac
+
+printf '[{"shot":1,"query":"staff badge","file":"%s","approved":true},{"shot":2,"query":"lobby door","file":"%s","approved":true}]' \
+  "$hello" "$hello" > /tmp/shots.json
+lib/gates.py manifest --file /tmp/shots.json --min 2 >/dev/null
+check "two approved shots meet --min" 0 "$?"
+
+# a manifest that cannot be read fails closed
+printf 'not json' > /tmp/shots.json
+lib/gates.py manifest --file /tmp/shots.json --min 1 >/dev/null
+check "malformed manifest JSON fails" 1 "$?"
+lib/gates.py manifest --file "$shots/nope.json" --min 1 >/dev/null
+check "a missing manifest fails" 1 "$?"
+printf '[]' > /tmp/shots.json
+lib/gates.py manifest --file /tmp/shots.json >/dev/null
+check "an empty manifest fails" 1 "$?"
+
+printf '{"shot":1}\n' > /tmp/shots.json
+lib/gates.py manifest --file /tmp/shots.json >/dev/null
+check "a manifest that is not a list fails" 1 "$?"
+
+rm -rf "$shots" /tmp/shots.json
+
 reset
 echo
 if [ "$fails" -eq 0 ]; then echo "all checks passed"; else echo "$fails check(s) failed"; exit 1; fi
