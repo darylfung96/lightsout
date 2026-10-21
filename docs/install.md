@@ -101,6 +101,9 @@ bin/            scaffold, job, report and lightsout launchers
 .gitignore      state and output exclusions
 ```
 
+`state/resources/` is created on the first cross-job resource lock; it lives at
+the workspace root so two jobs contend for the same lock.
+
 The marker records the workspace schema and the manager version that wrote it:
 
 ```toml

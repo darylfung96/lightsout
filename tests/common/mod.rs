@@ -130,6 +130,7 @@ impl Sandbox {
         for leaf in ["state", "out", "logs"] {
             let _ = fs::remove_dir_all(self.root.join("jobs").join(job).join(leaf));
         }
+        let _ = fs::remove_dir_all(self.root.join("state").join("resources"));
     }
 
     pub fn reset_noop(&self) {

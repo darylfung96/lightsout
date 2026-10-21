@@ -340,13 +340,14 @@ pub fn decide(policy: &Policy, job: &str, blocked: &Blocked) -> Resolution {
 
 pub fn heal_count(state: &Path) -> usize {
     let history = state.join("heal").join("history.tsv");
+    let today = clock::today();
     state::lines(&history)
         .into_iter()
         .filter(|line| {
-            line.split('\t')
-                .nth(3)
-                .map(|action| action.starts_with("agent"))
-                .unwrap_or(false)
+            let mut fields = line.split('\t');
+            let iso = fields.next().unwrap_or("");
+            let action = fields.nth(2).unwrap_or("");
+            iso.starts_with(&today) && action.starts_with("agent")
         })
         .count()
 }

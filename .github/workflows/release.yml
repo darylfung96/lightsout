@@ -107,9 +107,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           tag="${TAG#refs/tags/}"
+          # A manual dispatch from main has no tag; without this guard it
+          # publishes a release named "main". The tag is the release identity.
+          if [ "$REF_TYPE" != "tag" ] && [ -z "$INPUT_TAG" ]; then
+            echo "release: a tag input is required for a manual dispatch" >&2
+            exit 1
+          fi
+          case "$tag" in
+            v*) ;;
+            *) echo "release: tag '$tag' must start with v" >&2; exit 1 ;;
+          esac
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/* --clobber
           else

@@ -193,31 +193,6 @@ fn reason_bullets(block: &state::Blocked) -> ReasonBullets {
     }
 }
 
-fn registered_repairs(repo: &Path) -> Vec<String> {
-    let mut names = Vec::new();
-    let body = state::read_lossy(&repo.join("lib").join("repairs.sh"));
-    for line in body.lines() {
-        let Some(rest) = line.strip_prefix("repair_") else {
-            continue;
-        };
-        let Some(open) = rest.find('(') else {
-            continue;
-        };
-        let name = &rest[..open];
-        if name.is_empty()
-            || !name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        {
-            continue;
-        }
-        if rest[open..].trim_start().starts_with("()") {
-            names.push(name.to_string());
-        }
-    }
-    names
-}
-
 fn shell_quote(value: &str) -> String {
     if value.is_empty() {
         return "''".into();
@@ -415,7 +390,7 @@ pub fn build(repo: &Path, paths: &Paths) -> String {
             lines.push(format!("bin/job retry {name}"));
             lines.push(format!("bin/job status {name}"));
             lines.push("```".into());
-            let repairs = registered_repairs(repo);
+            let repairs = crate::commands::registered_repairs(repo);
             if !repairs.is_empty() {
                 lines.push(String::new());
                 lines.push(format!(

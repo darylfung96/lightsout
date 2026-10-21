@@ -114,6 +114,40 @@ pub fn lines(path: &Path) -> Vec<String> {
         .collect()
 }
 
+/// `state/lock` is live only while its pid names a running process. The
+/// directory alone is not evidence: SIGKILL, a reboot, or a failed pid write
+/// leaves the directory behind, and treating it as a live run would suppress
+/// the stale alarm forever.
+pub fn lock_live(state: &Path) -> bool {
+    let lock = state.join("lock");
+    if !lock.is_dir() {
+        return false;
+    }
+    let pid = read_lossy(&lock.join("pid"));
+    let pid = pid.trim();
+    if pid.is_empty() || !pid.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        let kill = if Path::new("/bin/kill").is_file() {
+            "/bin/kill"
+        } else {
+            "kill"
+        };
+        std::process::Command::new(kill)
+            .arg("-0")
+            .arg(pid)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 /// A run held today is file evidence that the day guard, the lock or a busy
 /// resource decided not to work; it must not read as a missed run.
 pub fn held_today(state: &Path, today: &str) -> bool {
@@ -216,45 +250,6 @@ pub fn expect_time(state: &Path) -> Option<(i64, String)> {
         return None;
     }
     Some((hour * 60 + minute, line.to_string()))
-}
-
-/// The expect form `check` reads: all whitespace removed first, then HH:MM.
-pub fn expect_time_loose(state: &Path) -> Option<String> {
-    let raw = fs::read(state.join("expect")).ok()?;
-    let body = String::from_utf8_lossy(&raw);
-    let first = body.lines().next().unwrap_or("");
-    let compact: String = first.chars().filter(|c| !c.is_whitespace()).collect();
-    if compact.is_empty() {
-        return None;
-    }
-    let bytes = compact.as_bytes();
-    if bytes.len() != 5 || bytes[2] != b':' {
-        return Some(compact);
-    }
-    if !bytes[..2].iter().all(|c| c.is_ascii_digit())
-        || !bytes[3..].iter().all(|c| c.is_ascii_digit())
-    {
-        return Some(compact);
-    }
-    let hour: u32 = compact[..2].parse().ok()?;
-    let minute: u32 = compact[3..].parse().ok()?;
-    if hour > 23 || minute > 59 {
-        return Some(compact);
-    }
-    Some(compact)
-}
-
-pub fn is_clock(value: &str) -> bool {
-    let b = value.as_bytes();
-    if b.len() != 5 || b[2] != b':' {
-        return false;
-    }
-    if !b[..2].iter().all(|c| c.is_ascii_digit()) || !b[3..].iter().all(|c| c.is_ascii_digit()) {
-        return false;
-    }
-    let h: u32 = value[..2].parse().unwrap_or(99);
-    let m: u32 = value[3..].parse().unwrap_or(99);
-    h <= 23 && m <= 59
 }
 
 /// `%Y-%m-%dT%H:%M:%S%z` for a file's mtime, or None when it is gone.

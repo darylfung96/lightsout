@@ -25,7 +25,7 @@ Exit: init 0 written or already initialized, 64 misuse or collision;
 const MARKER_HEADER: &str = "# LightsOut workspace marker. Written by `lightsout init`.\n\
 # schema is the workspace contract; manager is the binary that wrote it.\n";
 
-const GITIGNORE: &str = "logs/\njobs/*/logs/\njobs/*/state/\njobs/*/out/\nout/\n*.tmp\n";
+const GITIGNORE: &str = "logs/\n/state/\njobs/*/logs/\njobs/*/state/\njobs/*/out/\nout/\n*.tmp\n";
 
 const JOB_LAUNCHER: &str = "#!/usr/bin/env bash\n\
 # job — run the workspace manager through the installed lightsout binary.\n\
@@ -242,6 +242,7 @@ pub fn init(argv: &[String]) -> i32 {
         eprintln!("init: cannot create {}: {error}", target.display());
         return 1;
     }
+    let mut created: Vec<PathBuf> = Vec::new();
     for template in &templates {
         let path = target.join(template.rel);
         if path.exists() && template.optional_if_exists {
@@ -250,8 +251,16 @@ pub fn init(argv: &[String]) -> i32 {
         }
         if let Err(error) = write_template(&path, &template.body, template.mode) {
             eprintln!("init: cannot write {}: {error}", path.display());
+            // A partial office is worse than none: a retry would refuse the
+            // files this attempt already wrote. Remove only what this run
+            // created and leave anything that predated it untouched.
+            let _ = fs::remove_file(&path);
+            for path in created.iter().rev() {
+                let _ = fs::remove_file(path);
+            }
             return 1;
         }
+        created.push(path);
         println!("created {}", template.rel);
     }
 
@@ -393,7 +402,7 @@ pub fn doctor(root: &Path) -> i32 {
                             .filter(|value| !value.is_empty())
                             .or_else(|| env::var("U_RUNNER").ok().filter(|value| !value.is_empty()))
                             .unwrap_or_else(|| "dsh".into());
-                        if which(&runner).is_some() {
+                        if repo::which(&runner).is_some() {
                             ok(&format!("agent runner {runner}"));
                         } else {
                             warning(
@@ -463,6 +472,7 @@ pub fn doctor(root: &Path) -> i32 {
                 ok(&format!("jobs/{name}/job.sh"));
                 check_repair_allow(root, &name, &mut errors);
                 check_agent_profile(root, &name, &mut errors, &mut warnings);
+                check_expect(root, &name, &mut errors);
                 job_bodies.push((name, state::read_lossy(&job)));
             } else {
                 warning(&mut warnings, &format!("jobs/{name}/ has no job.sh"));
@@ -482,7 +492,7 @@ pub fn doctor(root: &Path) -> i32 {
         warning(&mut warnings, "spec/SCHEMA.md is missing");
     }
 
-    if which("bash").is_some() {
+    if repo::which("bash").is_some() {
         ok("bash");
     } else {
         fail(&mut errors, "bash is required to run jobs");
@@ -491,7 +501,7 @@ pub fn doctor(root: &Path) -> i32 {
     let needs_python = job_bodies.iter().any(|(_, body)| {
         body.contains("python3") || body.contains("U_MEMORY=1") || body.contains("U_MEMORY=\"1\"")
     });
-    match which("python3") {
+    match repo::which("python3") {
         Some(path) => ok(&format!("python3 ({path})")),
         None if needs_python => fail(
             &mut errors,
@@ -510,7 +520,7 @@ pub fn doctor(root: &Path) -> i32 {
     });
     if needs_media {
         for tool in ["ffprobe", "ffmpeg"] {
-            match which(tool) {
+            match repo::which(tool) {
                 Some(path) => ok(&format!("{tool} ({path})")),
                 None => warning(
                     &mut warnings,
@@ -521,7 +531,7 @@ pub fn doctor(root: &Path) -> i32 {
     }
 
     #[cfg(target_os = "macos")]
-    if which("osascript").is_none() {
+    if repo::which("osascript").is_none() {
         warning(
             &mut warnings,
             "osascript is missing; desktop notifications will be skipped",
@@ -552,7 +562,7 @@ fn check_agent_profile(root: &Path, job: &str, errors: &mut usize, warnings: &mu
                         "agent runner fake is configured but tests/fake-agent.sh is missing",
                     );
                 }
-            } else if which(&profile.runner).is_none() {
+            } else if repo::which(&profile.runner).is_none() {
                 warning(
                     warnings,
                     &format!(
@@ -612,6 +622,22 @@ fn parse_marker(body: &str) -> Option<(u32, Option<String>)> {
         }
     }
     schema.map(|schema| (schema, manager))
+}
+
+fn check_expect(root: &Path, job: &str, errors: &mut usize) {
+    let state = root.join("jobs").join(job).join("state");
+    let path = state.join("expect");
+    if !path.is_file() {
+        return;
+    }
+    if crate::state::expect_time(&state).is_some() {
+        ok(&format!("jobs/{job}/state/expect"));
+    } else {
+        fail(
+            errors,
+            &format!("jobs/{job}/state/expect is not HH:MM; the stale check cannot run"),
+        );
+    }
 }
 
 fn check_repair_allow(root: &Path, job: &str, errors: &mut usize) {
@@ -674,27 +700,4 @@ fn warning(warnings: &mut usize, message: &str) {
 fn fail(errors: &mut usize, message: &str) {
     *errors += 1;
     println!("FAIL {message}");
-}
-
-fn which(program: &str) -> Option<String> {
-    let path = env::var_os("PATH")?;
-    for dir in env::split_paths(&path) {
-        let candidate = dir.join(program);
-        if let Ok(meta) = fs::metadata(&candidate) {
-            if meta.is_file() {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    if meta.permissions().mode() & 0o111 != 0 {
-                        return Some(candidate.to_string_lossy().into_owned());
-                    }
-                }
-                #[cfg(not(unix))]
-                {
-                    return Some(candidate.to_string_lossy().into_owned());
-                }
-            }
-        }
-    }
-    None
 }

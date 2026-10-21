@@ -141,9 +141,11 @@ state/
   runs.tsv            <start-iso>TAB<end-iso>TAB<rc>TAB<verb>TAB<unit>TAB<seconds>, one line per completed run
   expect              one line, HH:MM local: the time a run is due
   alerts/<date>.stale the stale alarm for this job was raised today
-  resources/<name>.lock  <pid>TAB<expiry-epoch>: a cross-job resource, reclaimed
-                         when its pid is dead or the deadline has passed
 ```
+
+Workspace-level resources live outside a job, under
+`$REPO/state/resources/<name>.lock/` (`pid`, `expiry`), because two jobs must
+contend for the same path; see “Resource locks” below.
 
 `lightsout diagnose` reads the blocked line, the log up to the block, and `out/`,
 then writes `state/diagnosis.md` and exits `0` even while the job stays blocked,
@@ -186,9 +188,12 @@ failed to start. A job whose time has been reached with no `done/<today>`, no
 `lock`, no `blocked` marker and no run today that ended held has missed a run,
 and `status --json` reports `stale: true` for it.
 
-A hold is not a miss. Another run holding the `lock` is doing the work, and a
-run that exits `0` without writing `done` was deliberately held (the day guard,
-the lock, or a busy resource); `bin/job` records every completed run in
+A hold is not a miss. Another run holding the `lock` is doing the work only when
+the pid in `state/lock/pid` is still running; a lock directory left by SIGKILL
+or a reboot is not evidence of work, so `check` and `status` ignore it and the
+missed run is reported. A run that exits `0` without writing `done` was
+deliberately held (the day guard, the lock, or a busy resource); `bin/job`
+records every completed run in
 `state/last`, so rc `0` without `done` is the file evidence of that hold and it
 suppresses stale for the rest of the day. A job with no `expect` file is never
 late; inventing a schedule from its history would raise alarms nobody
@@ -235,22 +240,28 @@ job takes the resource after the run lock and before an attempt is counted,
 because a tick that found the resource busy did not try and must not spend the
 day's attempt budget on it.
 
-The lock is `state/resources/<name>.lock`, one line `<pid>TAB<expiry-epoch>`.
-The pid names the holder, and the deadline (`U_RESOURCE_TTL`, default 3600
-seconds) marks the point after which the file is stale even while that pid is
-alive, so a wedged holder cannot stall every later run. A lock whose pid no
-longer runs is stale too, so the file SIGKILL leaves behind is reclaimed by the
-next run instead of deadlocking it. A stale lock is replaced; a live one makes
-the run wait up to `U_RESOURCE_WAIT` seconds (default 0) and then exit `0` held,
-with `held: resource <name> is busy (pid N)` in the log. That hold writes no
-`done`, takes no attempt and records like any other held run, so it never reads
-as a missed run.
+The lock is `$REPO/state/resources/<name>.lock`, a directory holding `pid` and
+`expiry` (a legacy one-line file is still read). It is workspace-level on
+purpose: a lock under `jobs/<name>/state/` would give every job its own copy and
+never make two jobs contend. `mkdir` is the atomic claim, so two jobs starting
+at the same moment cannot both acquire it; a stale lock is renamed out of the
+way and replaced, and the loser sees the winner's new lock and reports busy.
 
-The lock is released by an EXIT trap, and only while the file still names this
-run's pid, so a run that waited past another run's deadline cannot delete the
-new holder's file. The trap composes with the one `lib/guards.sh` installs for
-the run lock, because bash keeps one EXIT trap per shell and the second trap
-would otherwise silently replace the first.
+The pid names the holder, and the deadline (`U_RESOURCE_TTL`, default 3600
+seconds) marks the point after which the lock is stale even while that pid is
+alive, so a wedged holder cannot stall every later run. A lock whose pid no
+longer runs is stale too, so the directory SIGKILL leaves behind is reclaimed by
+the next run instead of deadlocking it. A live lock makes the run wait up to
+`U_RESOURCE_WAIT` seconds (default 0) and then exit `0` held, with `held:
+resource <name> is busy (pid N)` in the log. That hold writes no `done`, takes
+no attempt and records like any other held run, so it never reads as a missed
+run.
+
+The lock is released by an EXIT trap, and only while it still names this run's
+pid, so a run that waited past another run's deadline cannot delete the new
+holder's lock. The trap composes with the one `lib/guards.sh` installs for the
+run lock, because bash keeps one EXIT trap per shell and the second trap would
+otherwise silently replace the first.
 
 ## Notifications
 

@@ -87,6 +87,9 @@ u_attempts() {
 
 u_guard_attempts() {
   local max="${MAX_ATTEMPTS:-2}" n
+  case "$max" in
+    ''|*[!0-9]*) u_die "MAX_ATTEMPTS must be a whole number" ;;
+  esac
   n=$(u_attempts)
   if [ "$n" -ge "$max" ]; then
     u_block "attempt cap reached ($n of $max today)"

@@ -43,9 +43,9 @@ fn agent_invocations(s: &Sandbox, calls: &str) -> usize {
 }
 
 fn write_resource_lock(s: &Sandbox, pid: u32, expiry: i64) {
-    s.mkdir("jobs/noop/state/resources");
+    s.mkdir("state/resources");
     s.write(
-        "jobs/noop/state/resources/fixture.lock",
+        "state/resources/fixture.lock",
         &format!("{pid}\t{expiry}\n"),
     );
 }
@@ -559,7 +559,7 @@ fn t18_resource_locks() {
     s.write("jobs/noop/state/expect", "00:00\n");
     let mut holder = s.spawn_sleep("30");
     write_resource_lock(&s, holder.id(), s.now_epoch() + 60);
-    let lock_before = s.read("jobs/noop/state/resources/fixture.lock");
+    let lock_before = s.read("state/resources/fixture.lock");
     let out = s.run(&["run", "noop"]);
     c.check("busy resource holds", 0, code(&out));
     c.check(
@@ -574,7 +574,7 @@ fn t18_resource_locks() {
     c.check(
         "a held run leaves the other run's lock alone",
         lock_before,
-        s.read("jobs/noop/state/resources/fixture.lock"),
+        s.read("state/resources/fixture.lock"),
     );
     c.is_true(
         "the resource hold is reported",
@@ -604,7 +604,7 @@ fn t18_resource_locks() {
     c.check(
         "a released resource leaves no lock",
         1,
-        if s.is_file("jobs/noop/state/resources/fixture.lock") {
+        if s.exists("state/resources/fixture.lock") {
             0
         } else {
             1
@@ -634,7 +634,7 @@ fn t18_resource_locks() {
     c.check(
         "the dead holder's lock is removed",
         1,
-        if s.is_file("jobs/noop/state/resources/fixture.lock") {
+        if s.exists("state/resources/fixture.lock") {
             0
         } else {
             1
@@ -644,7 +644,7 @@ fn t18_resource_locks() {
     s.reset_noop();
     let mut waiter = s.spawn_sleep("30");
     write_resource_lock(&s, waiter.id(), s.now_epoch() + 60);
-    let lock_path = s.path("jobs/noop/state/resources/fixture.lock");
+    let lock_path = s.path("state/resources/fixture.lock");
     let remover = thread::spawn(move || {
         thread::sleep(Duration::from_secs(2));
         let _ = fs::remove_file(lock_path);
@@ -677,11 +677,7 @@ fn t18_resource_locks() {
     c.check(
         "plan takes no resource",
         1,
-        if s.is_dir("jobs/noop/state/resources") {
-            0
-        } else {
-            1
-        },
+        if s.is_dir("state/resources") { 0 } else { 1 },
     );
     c.finish(18);
 }

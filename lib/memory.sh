@@ -11,6 +11,10 @@ export U_PI_MEMORY="${U_PI_MEMORY:-$HOME/agent-memory}"
 # memory). A plain status, not a block, because the job decides how to report
 # the stop; U_MEMORY_FILES is the space-separated list the job already sets.
 u_memory_check() {
+  if [ "${DRY:-0}" = 1 ]; then
+    u_say "plan: would run the memory gate"
+    return 0
+  fi
   local files="${U_MEMORY_FILES:-}"
   "${LIGHTSOUT_BIN:-$REPO/bin/lightsout}" gate memory --files "${files// /,}"
 }
@@ -18,6 +22,14 @@ u_memory_check() {
 # Steps 0-5 of the policy, minus the judgment in step 0: a job only calls this
 # for notes it actually changed. Returns non-zero so the caller can block.
 u_memory_pass() {
+  if [ "${DRY:-0}" = 1 ]; then
+    if [ "${U_MEMORY:-0}" = 1 ]; then
+      u_say "plan: would run the memory pass"
+    else
+      u_say "plan: memory pass skipped (U_MEMORY!=1)"
+    fi
+    return 0
+  fi
   if [ "${U_MEMORY:-0}" != 1 ]; then
     u_say "memory pass: skipped (U_MEMORY!=1)"
     return 0

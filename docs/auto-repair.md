@@ -176,7 +176,7 @@ jobs/<name>/state/heal/
       verdict              passed, no-progress, timeout, violation, ...
       before, after        the failure keys around the attempt
       backup/              originals of edited files, mirrored
-      applied.tsv          created/replaced records used by --revert
+      applied.tsv          JSON-quoted path + created/replaced, used by --revert
     attempt-2/
   history.tsv              one line per attempt; the last column is the agent
   lock/                    the job-level attempt lock
@@ -194,10 +194,13 @@ explains what was already tried.
 re-runs the job; it re-validates the stored JSON because the file may have been
 edited between the attempt and the approval.
 
-`lightsout heal <job> --revert N` restores the backup from `attempt-N` ; a
-replaced file comes back byte-for-byte and a created file is removed. A replaced
-file comes back byte-for-byte; a created file is removed. The record is
-`applied.tsv` , so a revert after a restart uses the same paths the apply wrote.
+`lightsout heal <job> --revert N` restores the backup from `attempt-N`; a
+replaced file comes back byte-for-byte and a created file is removed. The record
+is `applied.tsv`, whose paths are JSON-quoted so a newline or tab cannot forge a
+second record. A revert refuses a path outside the current `repair.allow`, because the
+allowlist is what the apply validated. It also refuses an older attempt while a
+newer applied attempt exists, because undoing the older one would discard the
+newer edit.
 
 `--revert` currently resolves today's attempt directory; a cross-day revert
 needs a rule for which day wins when two attempts share a number. A cross-day

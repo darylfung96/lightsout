@@ -3,8 +3,11 @@
 # Sourced by lib/guards.sh, so every job has u_resource beside the other guards.
 # Contract: docs/run-contract.md
 #
-# state/resources/<name>.lock is one line, <pid>TAB<expiry-epoch>. The pid names
-# the holder and the expiry is the deadline after which the file is stale even
+# $REPO/state/resources/<name>.lock is a directory holding <pid> and <expiry>
+# (a legacy one-line file is still read). It lives at the workspace level, not
+# under a job's state/, because two jobs that share a GPU must contend for the
+# same path. The pid names the holder and the expiry is the deadline after
+# which the lock is stale even
 # if that pid is alive, because a wedged holder (or a pid recycled after a
 # reboot) must not stall every later run. A lock whose pid no longer runs is
 # stale too: SIGKILL leaves the file behind and the next run has to reclaim it
@@ -15,14 +18,22 @@
 U_RESOURCES=""                      # names this run holds, space separated
 U_RESOURCE_TRAPPED="${U_RESOURCE_TRAPPED:-0}"
 U_RESOURCE_PREV_TRAP="${U_RESOURCE_PREV_TRAP:-}"
+# Resources are shared by every job in the workspace, so the lock cannot live
+# under a job's own state/ directory: two jobs would each take their own copy.
+U_RESOURCES_DIR="${U_RESOURCES_DIR:-${REPO:-.}/state/resources}"
 
 # u_resource_stale <file> — true when nobody holds the lock: no readable owner,
 # a pid that no longer runs, or a deadline already passed. A lock that cannot
 # name a live holder is not a hold.
 u_resource_stale() {
   local file="${1:-}" pid="" exp="" now
-  [ -f "$file" ] || return 0
-  IFS=$'\t' read -r pid exp < "$file" 2>/dev/null || true
+  [ -e "$file" ] || return 0
+  if [ -d "$file" ]; then
+    pid=$(cat "$file/pid" 2>/dev/null || true)
+    exp=$(cat "$file/expiry" 2>/dev/null || true)
+  else
+    IFS=$'\t' read -r pid exp < "$file" 2>/dev/null || true
+  fi
   case "${pid:-}" in ''|*[!0-9]*) return 0 ;; esac
   [ "$pid" -gt 0 ] 2>/dev/null || return 0
   kill -0 "$pid" 2>/dev/null || return 0
@@ -35,7 +46,9 @@ u_resource_stale() {
 # u_resource_holder <file> — the pid a message should name, or unknown.
 u_resource_holder() {
   local file="${1:-}" pid=""
-  if [ -f "$file" ]; then
+  if [ -d "$file" ]; then
+    pid=$(cat "$file/pid" 2>/dev/null || true)
+  elif [ -f "$file" ]; then
     IFS=$'\t' read -r pid _ < "$file" 2>/dev/null || true
   fi
   printf '%s' "${pid:-unknown}"
@@ -48,12 +61,14 @@ u_resource_release_all() {
   local name file pid
   [ -n "${U_RESOURCES:-}" ] || return 0
   for name in $U_RESOURCES; do
-    file="$STATE/resources/$name.lock"
+    file="$U_RESOURCES_DIR/$name.lock"
     pid=""
-    if [ -f "$file" ]; then
+    if [ -d "$file" ]; then
+      pid=$(cat "$file/pid" 2>/dev/null || true)
+    elif [ -f "$file" ]; then
       IFS=$'\t' read -r pid _ < "$file" 2>/dev/null || true
     fi
-    [ "${pid:-}" = "$$" ] && rm -f "$file"
+    [ "${pid:-}" = "$$" ] && rm -rf "$file"
   done
   U_RESOURCES=""
   return 0
@@ -91,21 +106,32 @@ u_resource_trap() {
 # hour), so a holder that dies without cleaning up cannot hold the resource
 # forever.
 u_resource_take() {
-  local name="$1" file="$2" ttl pid
-  u_resource_stale "$file" || return 1
+  local name="$1" file="$2" ttl pid attempt
   ttl="${U_RESOURCE_TTL:-3600}"
   case "$ttl" in ''|*[!0-9]*) u_die "U_RESOURCE_TTL must be a whole number of seconds" ;; esac
   [ "$ttl" -gt 0 ] 2>/dev/null || u_die "U_RESOURCE_TTL must be more than zero"
-  pid=$(u_resource_holder "$file")
-  # Written beside the lock and renamed, so a reader never sees half a line.
-  printf '%s\t%s\n' "$$" "$(( $(date +%s) + ttl ))" > "$file.tmp.$$"
-  mv -f "$file.tmp.$$" "$file"
-  U_RESOURCES="${U_RESOURCES}${U_RESOURCES:+ }$name"
-  if [ "$pid" != unknown ]; then
-    u_say "resource $name: reclaimed stale lock (pid $pid)"
-  fi
-  u_say "resource $name acquired (pid $$)"
-  return 0
+  for attempt in 1 2 3; do
+    # mkdir is the atomic claim: two jobs cannot both create the same
+    # directory, so there is no check-then-write window. The holder and its
+    # deadline live inside; a legacy file lock is still read and reclaimed.
+    if mkdir "$file" 2>/dev/null; then
+      printf '%s\n' "$$" > "$file/pid"
+      printf '%s\n' "$(( $(date +%s) + ttl ))" > "$file/expiry"
+      U_RESOURCES="${U_RESOURCES}${U_RESOURCES:+ }$name"
+      u_say "resource $name acquired (pid $$)"
+      return 0
+    fi
+    pid=$(u_resource_holder "$file")
+    u_resource_stale "$file" || return 1
+    # Only one process can rename the stale lock out of the way. The others
+    # then see the winner's new lock and return busy instead of trampling it.
+    rm -rf "$file.stale.$$" 2>/dev/null || true
+    if mv "$file" "$file.stale.$$" 2>/dev/null; then
+      rm -rf "$file.stale.$$"
+      u_say "resource $name: reclaimed stale lock (pid ${pid:-unknown})"
+    fi
+  done
+  return 1
 }
 
 # u_resource <name> — hold one named resource for this run. A busy resource is
@@ -120,7 +146,7 @@ u_resource() {
   esac
   wait_s="${U_RESOURCE_WAIT:-0}"
   case "$wait_s" in ''|*[!0-9]*) u_die "U_RESOURCE_WAIT must be a whole number of seconds" ;; esac
-  file="$STATE/resources/$name.lock"
+  file="$U_RESOURCES_DIR/$name.lock"
   if [ "$DRY" = 1 ]; then
     u_say "plan: would take resource $name"
     return 0
@@ -128,7 +154,7 @@ u_resource() {
   case " ${U_RESOURCES:-} " in
     *" $name "*) u_say "resource $name already held"; return 0 ;;
   esac
-  mkdir -p "$STATE/resources"
+  mkdir -p "$U_RESOURCES_DIR"
   u_resource_trap
   deadline=$(( $(date +%s) + wait_s ))
   while :; do

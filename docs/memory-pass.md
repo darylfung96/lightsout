@@ -38,4 +38,9 @@ reads, so a failed pass means the run is not finished — it is blocked.
 - `qmd` keeps its database outside the workspace, so a sandboxed run fails with
   `SQLITE_CANTOPEN`. Memory passes run unsandboxed.
 - The pass receipt is `python3 ~/agent-memory/memory-pass-check.py --latest --cwd
-  "$PWD"`; it must exit 0, and `--files` covers pages written by a script.
+  "$PWD"`; it must exit 0. The receipt is session-bound: it proves the latest
+  DSH session for that cwd. `lightsout gate memory --files` saves and lints each
+  named page, but does not invent a `memory-update.py` proof for a page written
+  by a non-session script; run that proof yourself, or pass the pages to the
+  receipt with `--files`, before relying on the receipt for script-written
+  notes.

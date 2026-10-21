@@ -27,6 +27,52 @@ pub fn is_workspace(path: &Path) -> bool {
     has_marker(path) || looks_like_repo(path)
 }
 
+/// Every job directory, sorted, with hidden directories and directories that
+/// have no `job.sh` left out. One rule for `list`, `check` and `status` keeps a
+/// stray directory from appearing in one view and not another.
+pub fn job_names(root: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(root.join("jobs")) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|entry| {
+            entry.path().join("job.sh").is_file()
+                && !entry.file_name().to_string_lossy().starts_with('.')
+        })
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// Resolve a program the way the shell's `command -v` does, including a path
+/// that already contains a separator. One implementation keeps `doctor` and
+/// the gates from disagreeing about whether a tool exists.
+pub fn which(program: &str) -> Option<String> {
+    if program.contains('/') {
+        return Some(program.to_string());
+    }
+    let path = env::var_os("PATH")?;
+    for dir in env::split_paths(&path) {
+        let candidate = dir.join(program);
+        if let Ok(meta) = fs::metadata(&candidate) {
+            if meta.is_file() {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if meta.permissions().mode() & 0o111 != 0 {
+                        return Some(candidate.to_string_lossy().into_owned());
+                    }
+                }
+                #[cfg(not(unix))]
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
 fn marker_ancestor(start: &Path) -> Option<PathBuf> {
     start
         .ancestors()

@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::agent;
 use crate::clock;
 use crate::heal;
-use crate::repo::Paths;
+use crate::repo::{self, Paths};
 use crate::state;
 use crate::triage;
 
@@ -79,19 +79,7 @@ fn retry_env(repo: &Path, name: &str) -> Paths {
 }
 
 pub fn list(repo: &Path) -> i32 {
-    let base = repo.join("jobs");
-    let Ok(entries) = fs::read_dir(&base) else {
-        return 0;
-    };
-    let mut names: Vec<String> = entries
-        .flatten()
-        .filter(|e| {
-            e.path().join("job.sh").is_file() && !e.file_name().to_string_lossy().starts_with('.')
-        })
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    for name in names {
+    for name in repo::job_names(repo) {
         println!("{name}");
     }
     0
@@ -220,8 +208,10 @@ fn run_job_with(repo: &Path, name: &str, verb: &str, options: RunOptions<'_>) ->
 
     if !dry {
         if let Some(blocked) = state::blocked_marker(&paths.state.join("blocked")) {
-            let bypass = env::var("U_RETRYING").ok().as_deref() == Some("1") || retrying;
-            if !bypass {
+            // Only the manager's own retry/heal calls may pass a block. An
+            // inherited `U_RETRYING=1` is not permission: it is an ordinary
+            // environment variable, and a scheduler can leak it into every job.
+            if !retrying {
                 println!(
                     "blocked since {} [{}]: {}",
                     blocked.iso, blocked.class, blocked.reason
@@ -370,17 +360,7 @@ pub fn check(repo: &Path, want: Option<&str>) -> i32 {
     let alerts = repo.join("logs").join("alerts.log");
     let check_log = repo.join("logs").join("check.log");
 
-    let Ok(entries) = fs::read_dir(repo.join("jobs")) else {
-        return 0;
-    };
-    let mut names: Vec<String> = entries
-        .flatten()
-        .filter(|e| {
-            e.path().join("job.sh").is_file() && !e.file_name().to_string_lossy().starts_with('.')
-        })
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
+    let names = repo::job_names(repo);
 
     let mut rc = 0;
     for name in names {
@@ -398,13 +378,17 @@ pub fn check(repo: &Path, want: Option<&str>) -> i32 {
 
 fn check_job(repo: &Path, name: &str, alerts: &Path, check_log: &Path) -> Check {
     let state_dir = repo.join("jobs").join(name).join("state");
-    let Some(expect) = state::expect_time_loose(&state_dir) else {
+    let Some((_, expect)) = state::expect_time(&state_dir) else {
+        // A schedule typo is not "nothing to do": without a valid expect time
+        // no later tick can decide the job is late, so fail the check and make
+        // the scheduler surface it instead of returning a quiet zero. A job
+        // with no expect file is still never late.
+        if state_dir.join("expect").is_file() {
+            eprintln!("check: {name}: state/expect is not HH:MM");
+            return Check::Blocked;
+        }
         return Check::Quiet;
     };
-    if !state::is_clock(&expect) {
-        eprintln!("check: {name}: state/expect is not HH:MM: {expect}");
-        return Check::Quiet;
-    }
     if clock::now_hm() < expect {
         return Check::Quiet;
     }
@@ -412,7 +396,7 @@ fn check_job(repo: &Path, name: &str, alerts: &Path, check_log: &Path) -> Check 
     if state_dir.join("done").join(&today).exists() {
         return Check::Quiet;
     }
-    if state_dir.join("lock").is_dir() {
+    if state::lock_live(&state_dir) {
         return Check::Quiet;
     }
     if state_dir.join("blocked").is_file() {
@@ -1119,13 +1103,32 @@ fn heal_apply(repo: &Path, name: &str) -> i32 {
     };
     // The proposal may have been written under an earlier profile; record the
     // agent that produced it, not whatever the job resolves to today.
-    let proposal_agent = state::read_lossy(&attempt_dir.join("meta.env"))
+    let meta = state::read_lossy(&attempt_dir.join("meta.env"));
+    let proposal_agent = meta
         .lines()
         .find_map(|line| line.strip_prefix("agent="))
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| agent_label.clone());
+    // A proposal is written for one failure key. If the job has blocked again
+    // for a different reason since then, applying it would edit an artifact the
+    // proposal never examined, so refuse rather than guess.
+    let current_key = triage::failure_key(&blocked);
+    let recorded_before = meta
+        .lines()
+        .find_map(|line| line.strip_prefix("before="))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if recorded_before.as_deref() != Some(current_key.as_str()) {
+        eprintln!(
+            "heal: attempt-{number} was written for '{}', but the current block is '{}'; refusing a stale proposal",
+            recorded_before.as_deref().unwrap_or("an unrecorded failure"),
+            current_key
+        );
+        return 2;
+    }
     let body = fs::read_to_string(attempt_dir.join("proposal.json")).unwrap_or_default();
     let proposal: Value = match serde_json::from_str(&body) {
         Ok(value) => value,
@@ -1221,6 +1224,30 @@ fn heal_revert(repo: &Path, name: &str, number: usize) -> i32 {
         .join(format!("attempt-{number}"));
     if !attempt_dir.is_dir() {
         eprintln!("heal: no attempt-{number} today");
+        return 2;
+    }
+    // Reverting an older attempt over a newer applied one would silently throw
+    // the newer edit away. Refuse and make the operator undo newest-first.
+    let base = attempt_dir.parent().unwrap_or(&attempt_dir);
+    let mut later_applied: Vec<usize> = Vec::new();
+    if let Ok(entries) = fs::read_dir(base) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(candidate) = name.strip_prefix("attempt-") else {
+                continue;
+            };
+            let Ok(candidate) = candidate.parse::<usize>() else {
+                continue;
+            };
+            if candidate > number && entry.path().join("applied.tsv").is_file() {
+                later_applied.push(candidate);
+            }
+        }
+    }
+    if let Some(latest) = later_applied.iter().max() {
+        eprintln!(
+            "heal: attempt-{number} is older than applied attempt-{latest}; revert attempt-{latest} first"
+        );
         return 2;
     }
     match heal::revert(&attempt_dir, &paths.dir) {
@@ -1373,11 +1400,14 @@ pub fn unblock(repo: &Path, name: &str) -> i32 {
     if blocked.is_file() {
         let raw = state::read_lossy(&blocked);
         let raw = raw.trim_end_matches(['\n', '\r']);
+        if let Err(error) = fs::remove_file(&blocked) {
+            eprintln!("unblock: cannot remove {}: {error}", blocked.display());
+            return 2;
+        }
         let _ = state::append(
             &paths.alerts(),
             &format!("{}\tunblocked\t{}\n", clock::iso_now(), raw),
         );
-        let _ = fs::remove_file(&blocked);
         println!("unblocked {}", paths.name);
     } else {
         println!("{} was not blocked", paths.name);

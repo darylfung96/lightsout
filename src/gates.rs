@@ -11,6 +11,8 @@ use std::process::Command;
 
 use serde_json::Value;
 
+use crate::repo;
+
 const USAGE: &str = "usage: lightsout gate <gate> [options]
 
 gates: contains duration exists loudness manifest memory never permalink
@@ -204,30 +206,6 @@ fn truthy(value: &Value) -> bool {
     }
 }
 
-fn which(program: &str) -> Option<String> {
-    if program.contains('/') {
-        return Some(program.to_string());
-    }
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(program);
-        if let Ok(meta) = fs::metadata(&candidate) {
-            if meta.is_file() {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    if meta.permissions().mode() & 0o111 != 0 {
-                        return Some(candidate.to_string_lossy().into_owned());
-                    }
-                }
-                #[cfg(not(unix))]
-                return Some(candidate.to_string_lossy().into_owned());
-            }
-        }
-    }
-    None
-}
-
 fn capture(program: &str, args: &[&str]) -> io::Result<std::process::Output> {
     Command::new(program).args(args).output()
 }
@@ -283,7 +261,7 @@ fn has_section(body: &str, name: &str) -> bool {
 }
 
 fn probe(path: &str) -> (Option<Value>, String) {
-    if which("ffprobe").is_none() {
+    if repo::which("ffprobe").is_none() {
         return (None, "ffprobe not installed".into());
     }
     let output = capture(
@@ -378,7 +356,7 @@ fn resolution(opts: &Opts) -> (bool, String) {
 }
 
 fn loudness(opts: &Opts) -> (bool, String) {
-    if which("ffmpeg").is_none() {
+    if repo::which("ffmpeg").is_none() {
         return (false, "ffmpeg not installed".into());
     }
     let output = capture(
@@ -628,7 +606,7 @@ fn memory(opts: &Opts) -> (bool, String) {
 }
 
 fn permalink(opts: &Opts) -> (bool, String) {
-    if which("curl").is_none() {
+    if repo::which("curl").is_none() {
         return (false, format!("{} requires curl", opts.url));
     }
     let output = capture(

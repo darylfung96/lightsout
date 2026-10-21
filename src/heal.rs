@@ -817,8 +817,15 @@ fn normalize_path(raw: &str) -> Result<PathBuf, Refusal> {
     if raw.is_empty() {
         return Err(refusal("path", "path is empty"));
     }
-    if raw.contains('\\') || raw.contains('\0') {
-        return Err(refusal("path", "path must not contain a backslash or NUL"));
+    if raw.contains('\\') {
+        return Err(refusal("path", "path must not contain a backslash"));
+    }
+    // `applied.tsv` is line-oriented: a newline or tab in a path would forge a
+    // second record, and `revert` would then act on a path the proposal never
+    // named. NUL and the other control characters are refused for the same
+    // reason, and because no real artifact name needs them.
+    if raw.chars().any(char::is_control) {
+        return Err(refusal("path", "path must not contain control characters"));
     }
     let path = Path::new(raw);
     if path.is_absolute() {
@@ -1088,9 +1095,13 @@ fn write_atomic(path: &Path, content: &str) -> Result<(), ApplyError> {
 fn write_applied(attempt_dir: &Path, applied: &[(PathBuf, bool)]) -> Result<(), ApplyError> {
     let mut body = String::new();
     for (rel, existed) in applied {
+        // The path is JSON-quoted so a tab or newline can never split one
+        // record into two. Older attempts wrote the raw path; `revert` still
+        // reads that form, but every new record is escaped.
+        let encoded = serde_json::to_string(&rel.to_string_lossy())
+            .map_err(|error| apply_error(format!("cannot encode an applied path: {error}")))?;
         body.push_str(&format!(
-            "{}\t{}\n",
-            rel.display(),
+            "{encoded}\t{}\n",
             if *existed { "replaced" } else { "created" }
         ));
     }
@@ -1113,6 +1124,11 @@ fn rollback(attempt_dir: &Path, job_dir: &Path, applied: &[(PathBuf, bool)]) {
 pub fn revert(attempt_dir: &Path, job_dir: &Path) -> Result<usize, ApplyError> {
     let body = fs::read_to_string(attempt_dir.join("applied.tsv"))
         .map_err(|error| apply_error(format!("no applied record: {error}")))?;
+    let allowed: Vec<PathBuf> = allowed_prefixes(job_dir)
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    let prefixes = normalize_allow(&allowed);
     let mut restored = 0usize;
     for line in body.lines() {
         let mut parts = line.split('\t');
@@ -1120,10 +1136,25 @@ pub fn revert(attempt_dir: &Path, job_dir: &Path) -> Result<usize, ApplyError> {
             continue;
         };
         let kind = parts.next().unwrap_or("replaced");
-        let rel = normalize_path(raw).map_err(|refusal| apply_error(refusal.to_string()))?;
+        // New records quote the path; older attempts wrote it raw. Accept both,
+        // but never let a forged record name a path outside the allowlist.
+        let raw = if raw.starts_with('"') {
+            serde_json::from_str::<String>(raw).map_err(|error| {
+                apply_error(format!("cannot decode the applied path {raw}: {error}"))
+            })?
+        } else {
+            raw.to_string()
+        };
+        let rel = normalize_path(&raw).map_err(|refusal| apply_error(refusal.to_string()))?;
         if is_protected(&rel) {
             return Err(apply_error(format!(
                 "'{}' is protected and cannot be reverted through",
+                rel.display()
+            )));
+        }
+        if !prefixes.iter().any(|prefix| rel.starts_with(prefix)) {
+            return Err(apply_error(format!(
+                "'{}' is outside the current repair allowlist",
                 rel.display()
             )));
         }
@@ -1169,21 +1200,33 @@ pub struct Fingerprint {
 }
 
 /// A metadata snapshot of everything an agent must not edit during its run.
-/// The `state/heal/` directory is excluded because the runner and the manager
-/// write the prompt, proposal and log there on purpose.
+/// The current job's `state/heal/` directory is excluded because the runner and
+/// the manager write the prompt, proposal and log there on purpose; every other
+/// job and code directory is in scope, because an agent that can edit a
+/// neighbouring job's `job.sh` has escaped the job it was asked to repair.
 pub fn fingerprint(repo: &Path, paths: &Paths) -> Fingerprint {
     let mut entries = Vec::new();
     let skip = paths.state.join("heal");
-    walk_fingerprint(repo, &paths.dir, Some(&skip), &mut entries);
-    walk_fingerprint(repo, &repo.join("lib"), None, &mut entries);
-    walk_fingerprint(repo, &repo.join("spec"), None, &mut entries);
-    let policy = repo.join("triage.conf");
-    if let Ok(meta) = fs::metadata(&policy) {
-        entries.push((
-            policy.strip_prefix(repo).unwrap_or(&policy).to_path_buf(),
-            meta.len(),
-            modified(meta),
-        ));
+    walk_fingerprint(repo, &repo.join("jobs"), Some(&skip), &mut entries);
+    for dir in ["lib", "spec", "bin", "src", "tests", "packaging"] {
+        walk_fingerprint(repo, &repo.join(dir), None, &mut entries);
+    }
+    for rel in [
+        "triage.conf",
+        "agents.conf",
+        "lightsout.toml",
+        "Cargo.toml",
+        "Cargo.lock",
+        "install.sh",
+    ] {
+        let path = repo.join(rel);
+        if let Ok(meta) = fs::metadata(&path) {
+            entries.push((
+                path.strip_prefix(repo).unwrap_or(&path).to_path_buf(),
+                meta.len(),
+                modified(meta),
+            ));
+        }
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     entries.dedup_by(|a, b| a.0 == b.0);

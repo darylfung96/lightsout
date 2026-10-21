@@ -30,15 +30,10 @@ case "$VIDEO_REPO" in
   /*) ;;
   *)  VIDEO_REPO="$PWD/$VIDEO_REPO" ;;
 esac
-[ -d "$VIDEO_REPO" ] || {
-  printf 'everyday-laws: VIDEO_REPO is not a directory: %s\n' "$VIDEO_REPO" >&2
-  exit 2
-}
-[ -x "$VIDEO_REPO/pipeline/daily-build.sh" ] || {
-  printf 'everyday-laws: no executable driver at %s\n' \
-    "$VIDEO_REPO/pipeline/daily-build.sh" >&2
-  exit 2
-}
+[ -d "$VIDEO_REPO" ] || u_block --class human --source preflight \
+  "VIDEO_REPO is not a directory: $VIDEO_REPO"
+[ -x "$VIDEO_REPO/pipeline/daily-build.sh" ] || u_block --class human --source preflight \
+  "no executable driver at $VIDEO_REPO/pipeline/daily-build.sh"
 
 # plan touches nothing: u_say's job log is the one file it would create, so in
 # plan mode the report goes to stdout only (docs/run-contract.md).
@@ -163,16 +158,14 @@ u_guard_attempts
 u_guard_disk 2000
 
 if [ "$DRY" = 1 ]; then
-  NEXT_EP=$(next_episode_readonly) || {
-    printf 'everyday-laws: cannot resolve the next episode from %s\n' "$VIDEO_REPO" >&2
-    exit 2
-  }
+  NEXT_EP=$(next_episode_readonly) || u_block --class human --source preflight \
+    "cannot resolve the next episode from $VIDEO_REPO"
   ep="$NEXT_EP"
 else
   preflight
   ep="$PREFLIGHT_EP"
 fi
-[ -n "$ep" ] || { printf 'everyday-laws: no episode resolved\n' >&2; exit 2; }
+[ -n "$ep" ] || u_block --class human --source preflight "no episode resolved"
 
 topic=$(grep -E "^${ep}\|" "$VIDEO_REPO/pipeline/topic-queue.txt" 2>/dev/null | head -1 || true)
 [ -n "$topic" ] || u_block --class human --source preflight \

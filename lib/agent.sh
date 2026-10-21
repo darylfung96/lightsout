@@ -38,11 +38,49 @@ u_agent_marker() {
   esac
 }
 
+# u_bounded <seconds> <timeout-marker> <command...> — run a command with a
+# wall-clock deadline. The caller's command is exec'd, so the watchdog kills
+# the runner itself rather than a wrapper shell. A timeout returns 124; any
+# other result is the child's own exit. This is shared by the lesson agent and
+# the repair agent, because a hung runner must never hold the run lock forever.
+u_bounded() {
+  local timeout="${1:-}" marker="${2:-}" pid watchdog rc=0
+  shift 2 2>/dev/null || true
+  case "$timeout" in
+    ''|*[!0-9]*) echo "agent: U_AGENT_TIMEOUT must be a whole number" >&2; return 64 ;;
+  esac
+  [ "$timeout" -gt 0 ] || { echo "agent: U_AGENT_TIMEOUT must be positive" >&2; return 64; }
+  [ "$#" -gt 0 ] || { echo "agent: u_bounded needs a command" >&2; return 64; }
+  rm -f "$marker" 2>/dev/null || true
+  "$@" &
+  pid=$!
+  (
+    # The watchdog must not inherit the job's stdout/stderr: a caller that
+    # captures the job through a pipe would otherwise wait for this sleep to
+    # finish even after the runner is gone.
+    sleep "$timeout"
+    [ -n "$marker" ] && : > "$marker"
+    kill -TERM "$pid" 2>/dev/null || true
+    sleep 2
+    kill -KILL "$pid" 2>/dev/null || true
+  ) </dev/null >/dev/null 2>&1 &
+  watchdog=$!
+  wait "$pid" || rc=$?
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  if [ -n "$marker" ] && [ -f "$marker" ]; then
+    rm -f "$marker"
+    return 124
+  fi
+  return "$rc"
+}
+
 # u_agent <prompt-file> <marker> — run the runner once on a prompt already on
-# disk, then freeze success. Returns non-zero when the runner fails and writes
-# no marker then.
+# disk, then freeze success. Returns non-zero when the runner fails or exceeds
+# U_AGENT_TIMEOUT (600s by default), and writes no marker then.
 u_agent() {
   local prompt="${1:-}" marker_arg="${2:-}" runner="${U_RUNNER:-dsh}" marker rc=0 text
+  local timeout="${U_AGENT_TIMEOUT:-600}" timeout_marker
   [ -n "$prompt" ] || u_die "u_agent: a prompt file is required"
   [ -n "$marker_arg" ] || u_die "u_agent: a marker is required"
   marker=$(u_agent_marker "$marker_arg")
@@ -55,46 +93,56 @@ u_agent() {
     return 0
   fi
   [ -s "$prompt" ] || u_die "u_agent: no prompt at $prompt"
-  case "$runner" in
-    fake)
-      local fake="${REPO:?u_agent: REPO is not set}/tests/fake-agent.sh"
-      [ -x "$fake" ] || u_die "u_agent: the fake runner is missing: $fake"
-      u_say "agent: runner fake on $prompt"
-      "$fake" "$prompt" || rc=$?
-      ;;
-    dsh)
-      command -v dsh >/dev/null 2>&1 || u_die "u_agent: runner dsh is not installed"
-      u_say "agent: runner dsh (headless) on $prompt${U_AGENT_PROFILE:+ [$U_AGENT_PROFILE]}"
-      if [ -n "${U_AGENT_PATCH:-}" ]; then
-        dsh --profile headless --patch "$U_AGENT_PATCH" < "$prompt" || rc=$?
-      else
-        dsh --profile headless < "$prompt" || rc=$?
-      fi
-      ;;
-    claude)
-      command -v claude >/dev/null 2>&1 || u_die "u_agent: runner claude is not installed"
-      text=$(cat "$prompt")
-      u_say "agent: runner claude (-p) on $prompt${U_AGENT_MODEL:+ [model $U_AGENT_MODEL]}"
-      if [ -n "${U_AGENT_MODEL:-}" ]; then
-        claude -p --model "$U_AGENT_MODEL" "$text" || rc=$?
-      else
-        claude -p "$text" || rc=$?
-      fi
-      ;;
-    codex)
-      command -v codex >/dev/null 2>&1 || u_die "u_agent: runner codex is not installed"
-      text=$(cat "$prompt")
-      u_say "agent: runner codex (exec) on $prompt${U_AGENT_MODEL:+ [model $U_AGENT_MODEL]}"
-      if [ -n "${U_AGENT_MODEL:-}" ]; then
-        codex exec --model "$U_AGENT_MODEL" "$text" || rc=$?
-      else
-        codex exec "$text" || rc=$?
-      fi
-      ;;
-    *)
-      u_die "u_agent: unknown runner '$runner' (use dsh, claude, codex or fake)"
-      ;;
-  esac
+  timeout_marker="${STATE:-${TMPDIR:-/tmp}}/.agent-timeout.$$"
+
+  run_agent() {
+    case "$runner" in
+      fake)
+        local fake="${REPO:?u_agent: REPO is not set}/tests/fake-agent.sh"
+        [ -x "$fake" ] || u_die "u_agent: the fake runner is missing: $fake"
+        u_say "agent: runner fake on $prompt"
+        exec "$fake" "$prompt"
+        ;;
+      dsh)
+        command -v dsh >/dev/null 2>&1 || u_die "u_agent: runner dsh is not installed"
+        u_say "agent: runner dsh (headless) on $prompt${U_AGENT_PROFILE:+ [$U_AGENT_PROFILE]}"
+        if [ -n "${U_AGENT_PATCH:-}" ]; then
+          exec dsh --profile headless --patch "$U_AGENT_PATCH" < "$prompt"
+        else
+          exec dsh --profile headless < "$prompt"
+        fi
+        ;;
+      claude)
+        command -v claude >/dev/null 2>&1 || u_die "u_agent: runner claude is not installed"
+        text=$(cat "$prompt")
+        u_say "agent: runner claude (-p) on $prompt${U_AGENT_MODEL:+ [model $U_AGENT_MODEL]}"
+        if [ -n "${U_AGENT_MODEL:-}" ]; then
+          exec claude -p --model "$U_AGENT_MODEL" "$text"
+        else
+          exec claude -p "$text"
+        fi
+        ;;
+      codex)
+        command -v codex >/dev/null 2>&1 || u_die "u_agent: runner codex is not installed"
+        text=$(cat "$prompt")
+        u_say "agent: runner codex (exec) on $prompt${U_AGENT_MODEL:+ [model $U_AGENT_MODEL]}"
+        if [ -n "${U_AGENT_MODEL:-}" ]; then
+          exec codex exec --model "$U_AGENT_MODEL" "$text"
+        else
+          exec codex exec "$text"
+        fi
+        ;;
+      *)
+        u_die "u_agent: unknown runner '$runner' (use dsh, claude, codex or fake)"
+        ;;
+    esac
+  }
+
+  u_bounded "$timeout" "$timeout_marker" run_agent || rc=$?
+  if [ "$rc" -eq 124 ]; then
+    u_say "agent: runner $runner timed out after ${timeout}s; no marker written"
+    return 124
+  fi
   if [ "$rc" -ne 0 ]; then
     u_say "agent: runner $runner failed (exit $rc); no marker written"
     return "$rc"

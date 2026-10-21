@@ -95,9 +95,16 @@ fn job_state(repo: &Path, name: &str) -> JobState {
         }
     }
 
-    let locked = st.join("lock").is_dir();
+    let locked = state::lock_live(&st);
     if locked {
         rec.state = "running".into();
+    }
+
+    // A run that exited 1 and left no block is a failed run, not a job that
+    // has never run. The last_exit column already carries the code; the state
+    // column has to agree with it.
+    if rec.state == "never run" && rec.last_exit == Some(1) {
+        rec.state = "failed".into();
     }
 
     if log.is_file() {
@@ -157,25 +164,19 @@ fn last_stage_line(body: &str) -> Option<(String, String, String)> {
 }
 
 fn jobs(repo: &Path) -> Vec<JobState> {
-    let base = repo.join("jobs");
-    let Ok(entries) = fs::read_dir(&base) else {
-        return Vec::new();
-    };
-    let mut names: Vec<String> = entries
-        .flatten()
-        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    names.iter().map(|name| job_state(repo, name)).collect()
+    repo::job_names(repo)
+        .iter()
+        .map(|name| job_state(repo, name))
+        .collect()
 }
 
 fn order(state: &str) -> u8 {
     match state {
         "blocked" => 0,
         "running" => 1,
-        "done today" => 2,
-        "never run" => 3,
+        "failed" => 2,
+        "done today" => 3,
+        "never run" => 4,
         _ => 9,
     }
 }
@@ -219,6 +220,21 @@ fn to_json(rec: &JobState) -> Value {
     })
 }
 
+fn html_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 fn runs_html(history: &[state::Run]) -> String {
     let start = history.len().saturating_sub(5);
     let recent = &history[start..];
@@ -229,8 +245,9 @@ fn runs_html(history: &[state::Run]) -> String {
     for run in recent.iter().rev() {
         let stamp = slice_chars(&run.end, 5, 16).replace('T', " ");
         spans.push(format!(
-            "<span class='run'>{stamp} {} rc {} {}</span>",
-            run.verb,
+            "<span class='run'>{} {} rc {} {}</span>",
+            html_escape(&stamp),
+            html_escape(&run.verb),
             run.rc,
             state::duration_text(Some(run.seconds))
         ));
@@ -250,13 +267,18 @@ fn html_table(data: &[JobState]) -> String {
     let mut rows = Vec::new();
     for rec in data {
         let class = rec.state.replace(' ', "-");
+        let stage = if rec.stage.is_empty() {
+            "—".to_string()
+        } else {
+            html_escape(&rec.stage)
+        };
         rows.push(format!(
             "<tr class='{class}'><td><b>{}</b></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-            rec.name,
-            rec.state,
-            rec.detail,
-            if rec.stage.is_empty() { "—" } else { &rec.stage },
-            rec.last_run.as_deref().unwrap_or("—"),
+            html_escape(&rec.name),
+            html_escape(&rec.state),
+            html_escape(&rec.detail),
+            stage,
+            html_escape(rec.last_run.as_deref().unwrap_or("—")),
             state::duration_text(rec.last_duration),
             runs_html(&rec.runs),
             rec.attempts_today,
@@ -318,6 +340,12 @@ pub fn run(argv: &[String]) -> i32 {
             return 64;
         }
     };
+    if let Some(name) = &args.name {
+        if !repo.join("jobs").join(name).join("job.sh").is_file() {
+            eprintln!("no such job: {name}");
+            return 64;
+        }
+    }
     let mut data: Vec<JobState> = jobs(&repo)
         .into_iter()
         .filter(|rec| args.name.as_deref().is_none_or(|name| name == rec.name))
@@ -346,7 +374,8 @@ pub fn run(argv: &[String]) -> i32 {
              th,td{{text-align:left;padding:.5rem .75rem;border-bottom:1px solid #e5e5e5;vertical-align:top}}\n\
              th{{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:#666}}\n\
              tr.blocked{{background:#fdeceb}} tr.blocked td:nth-child(2){{color:#b42318;font-weight:600}}\n\
-             tr.running{{background:#fff8e6}} tr.done-today td:nth-child(2){{color:#087443}}\n\
+             tr.running{{background:#fff8e6}} tr.failed{{background:#fff3cd}} tr.failed td:nth-child(2){{color:#b54708}}\n\
+             tr.done-today td:nth-child(2){{color:#087443}}\n\
              span.run{{font-size:.85rem;color:#555}}\n\
              caption{{text-align:left;font-weight:600;margin-bottom:.75rem}}\n\
              </style><table><caption>LightsOut — {}</caption>\n\
