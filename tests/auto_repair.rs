@@ -504,6 +504,7 @@ fn heal_timeout_is_recorded() {
         &s,
         r#"{"fixable":true,"summary":"late","edits":[{"path":"out/ready","content":"ok"}]}"#,
     );
+    let after = s.path("after-timeout").to_string_lossy().into_owned();
 
     let out = s.run_env(
         &["heal", "ready"],
@@ -511,6 +512,7 @@ fn heal_timeout_is_recorded() {
             ("U_RUNNER", "fake"),
             ("FAKE_AGENT_PROPOSAL", &proposal),
             ("FAKE_AGENT_SLEEP", "5"),
+            ("FAKE_AGENT_AFTER", &after),
             ("U_AGENT_TIMEOUT", "1"),
         ],
     );
@@ -524,6 +526,10 @@ fn heal_timeout_is_recorded() {
         s.read("jobs/ready/state/heal/history.tsv")
             .contains("timeout"),
         "verdict is timeout"
+    );
+    assert!(
+        !s.exists("after-timeout"),
+        "the runner was stopped before it could finish"
     );
 }
 

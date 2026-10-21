@@ -32,6 +32,12 @@ fi
 if [ -n "${FAKE_AGENT_SLEEP:-}" ]; then
   sleep "$FAKE_AGENT_SLEEP"
 fi
+if [ -n "${FAKE_AGENT_AFTER:-}" ]; then
+  printf 'after\n' > "$FAKE_AGENT_AFTER"
+fi
+if [ -n "${FAKE_AGENT_AFTER:-}" ]; then
+  printf 'after\n' > "$FAKE_AGENT_AFTER"
+fi
 if [ -n "${FAKE_AGENT_PROPOSAL_SEQ:-}" ]; then
   [ -n "${FAKE_AGENT_STATE:-}" ] || {
     echo "fake-agent: FAKE_AGENT_PROPOSAL_SEQ needs FAKE_AGENT_STATE" >&2

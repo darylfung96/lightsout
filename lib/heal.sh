@@ -22,20 +22,20 @@ u_heal_agent() {
   run_heal_runner() {
     case "$runner" in
       fake)
-        "$REPO/tests/fake-agent.sh" "$prompt"
+        exec "$REPO/tests/fake-agent.sh" "$prompt"
         ;;
       dsh)
         if [ -n "${U_AGENT_PATCH:-}" ]; then
-          dsh --profile headless --patch "$U_AGENT_PATCH" < "$prompt"
+          exec dsh --profile headless --patch "$U_AGENT_PATCH" < "$prompt"
         else
-          dsh --profile headless < "$prompt"
+          exec dsh --profile headless < "$prompt"
         fi
         ;;
       claude)
-        claude -p "$(cat "$prompt")"
+        exec claude -p "$(cat "$prompt")"
         ;;
       codex)
-        codex exec "$(cat "$prompt")"
+        exec codex exec "$(cat "$prompt")"
         ;;
       *)
         echo "heal: unknown runner '$runner' (use dsh, claude, codex or fake)" >&2

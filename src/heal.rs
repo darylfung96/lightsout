@@ -923,8 +923,14 @@ pub fn apply(attempt_dir: &Path, job_dir: &Path, edits: &[Edit]) -> Result<Appli
             }
         };
         let full = job_dir.join(&rel);
-        if !full.starts_with(job_dir) {
-            result = Err(apply_error("edit escapes the job directory"));
+        if !full.starts_with(job_dir) || is_protected(&rel) {
+            result = Err(apply_error(
+                "edit escapes the job directory or is protected",
+            ));
+            break;
+        }
+        if let Err(refusal) = check_components(job_dir, &rel) {
+            result = Err(apply_error(refusal.to_string()));
             break;
         }
         match &edit.kind {
@@ -1091,6 +1097,15 @@ pub fn revert(attempt_dir: &Path, job_dir: &Path) -> Result<usize, ApplyError> {
         };
         let kind = parts.next().unwrap_or("replaced");
         let rel = normalize_path(raw).map_err(|refusal| apply_error(refusal.to_string()))?;
+        if is_protected(&rel) {
+            return Err(apply_error(format!(
+                "'{}' is protected and cannot be reverted through",
+                rel.display()
+            )));
+        }
+        if let Err(refusal) = check_components(job_dir, &rel) {
+            return Err(apply_error(refusal.to_string()));
+        }
         let full = job_dir.join(&rel);
         if kind == "created" {
             if full.exists() {

@@ -110,7 +110,9 @@ manager = "0.2.0"
 
 Once the marker exists, `init` is idempotent: it reports the existing
 workspace and writes nothing, so a repeated setup command cannot overwrite
-local edits. It refuses to overwrite existing LightsOut files and writes
+local edits. A workspace written by 0.1.0 lacks `triage.conf`, `lib/heal.sh`
+and `lib/prompts/repair.md`; `doctor` names each missing file, and copying them
+from a fresh `init` is enough because the run contract is additive. It refuses to overwrite existing LightsOut files and writes
 nothing when any collision is found; `--dry-run` prints the same plan without
 creating the directory or any file. An existing `.gitignore` is kept rather
 than replaced, because the file often holds rules the project owned before
@@ -130,8 +132,8 @@ spelling therefore keeps working.
 
 ## Check the installation
 
-`lightsout doctor` reads the marker, verifies the six shell libraries and the
-job directories, then checks the tools the jobs actually reference:
+`lightsout doctor` reads the marker, verifies the shell libraries and the
+repair prompt, then checks the tools the jobs actually reference:
 
 ```sh
 lightsout doctor
