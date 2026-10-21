@@ -6,6 +6,7 @@
 
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -886,6 +887,334 @@ fn check_components(job_dir: &Path, path: &Path) -> Result<(), Refusal> {
     Ok(())
 }
 
+#[derive(Debug)]
+pub struct ApplyError {
+    pub message: String,
+}
+
+impl std::fmt::Display for ApplyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+fn apply_error(message: impl Into<String>) -> ApplyError {
+    ApplyError {
+        message: message.into(),
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct Applied {
+    pub edited: Vec<PathBuf>,
+    pub created: Vec<PathBuf>,
+}
+
+pub fn apply(attempt_dir: &Path, job_dir: &Path, edits: &[Edit]) -> Result<Applied, ApplyError> {
+    let mut applied: Vec<(PathBuf, bool)> = Vec::new();
+    let mut result: Result<(), ApplyError> = Ok(());
+
+    for edit in edits {
+        let rel = match normalize_path(&edit.path.to_string_lossy()) {
+            Ok(rel) => rel,
+            Err(refusal) => {
+                result = Err(apply_error(refusal.to_string()));
+                break;
+            }
+        };
+        let full = job_dir.join(&rel);
+        if !full.starts_with(job_dir) {
+            result = Err(apply_error("edit escapes the job directory"));
+            break;
+        }
+        match &edit.kind {
+            EditKind::Content(content) => {
+                let existed = full.exists();
+                if existed {
+                    if let Err(error) = backup(attempt_dir, job_dir, &rel) {
+                        result = Err(error);
+                        break;
+                    }
+                }
+                if let Err(error) = write_atomic(&full, content) {
+                    result = Err(error);
+                    break;
+                }
+                applied.push((rel, existed));
+            }
+            EditKind::Delete => {
+                if !full.is_file() {
+                    result = Err(apply_error(format!(
+                        "delete target '{}' is not a regular file",
+                        rel.display()
+                    )));
+                    break;
+                }
+                if let Err(error) = backup(attempt_dir, job_dir, &rel) {
+                    result = Err(error);
+                    break;
+                }
+                if let Err(error) = fs::remove_file(&full) {
+                    result = Err(apply_error(format!(
+                        "cannot delete '{}': {error}",
+                        rel.display()
+                    )));
+                    break;
+                }
+                applied.push((rel, true));
+            }
+        }
+    }
+
+    if result.is_ok() {
+        if let Err(error) = write_applied(attempt_dir, &applied) {
+            result = Err(error);
+        }
+    }
+    if let Err(error) = result {
+        rollback(attempt_dir, job_dir, &applied);
+        return Err(error);
+    }
+
+    let mut out = Applied::default();
+    for (rel, existed) in applied {
+        out.edited.push(rel.clone());
+        if !existed {
+            out.created.push(rel);
+        }
+    }
+    Ok(out)
+}
+
+fn backup(attempt_dir: &Path, job_dir: &Path, rel: &Path) -> Result<(), ApplyError> {
+    let source = job_dir.join(rel);
+    let target = attempt_dir.join("backup").join(rel);
+    if target.is_file() {
+        return Ok(());
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            apply_error(format!(
+                "cannot create backup dir {}: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    fs::copy(&source, &target).map_err(|error| {
+        apply_error(format!(
+            "cannot back up '{}' to '{}': {error}",
+            source.display(),
+            target.display()
+        ))
+    })?;
+    let permissions = fs::metadata(&source)
+        .map_err(|error| apply_error(format!("cannot read {}: {error}", source.display())))?
+        .permissions();
+    let _ = fs::set_permissions(&target, permissions);
+    Ok(())
+}
+
+fn write_atomic(path: &Path, content: &str) -> Result<(), ApplyError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| apply_error(format!("'{}' has no parent", path.display())))?;
+    let permissions = fs::metadata(path).ok().map(|meta| meta.permissions());
+    let temp = parent.join(format!(
+        ".lightsout-tmp-{}-{}",
+        std::process::id(),
+        clock::now_epoch()
+    ));
+    {
+        let mut file = fs::File::create(&temp)
+            .map_err(|error| apply_error(format!("cannot create {}: {error}", temp.display())))?;
+        if let Err(error) = file.write_all(content.as_bytes()) {
+            let _ = fs::remove_file(&temp);
+            return Err(apply_error(format!(
+                "cannot write {}: {error}",
+                temp.display()
+            )));
+        }
+        if let Err(error) = file.sync_all() {
+            let _ = fs::remove_file(&temp);
+            return Err(apply_error(format!(
+                "cannot sync {}: {error}",
+                temp.display()
+            )));
+        }
+    }
+    if let Some(permissions) = permissions {
+        let _ = fs::set_permissions(&temp, permissions);
+    }
+    if let Err(error) = fs::rename(&temp, path) {
+        let _ = fs::remove_file(&temp);
+        return Err(apply_error(format!(
+            "cannot replace '{}': {error}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn write_applied(attempt_dir: &Path, applied: &[(PathBuf, bool)]) -> Result<(), ApplyError> {
+    let mut body = String::new();
+    for (rel, existed) in applied {
+        body.push_str(&format!(
+            "{}\t{}\n",
+            rel.display(),
+            if *existed { "replaced" } else { "created" }
+        ));
+    }
+    fs::write(attempt_dir.join("applied.tsv"), body)
+        .map_err(|error| apply_error(format!("cannot record applied edits: {error}")))
+}
+
+fn rollback(attempt_dir: &Path, job_dir: &Path, applied: &[(PathBuf, bool)]) {
+    for (rel, existed) in applied.iter().rev() {
+        let full = job_dir.join(rel);
+        if *existed {
+            let backup = attempt_dir.join("backup").join(rel);
+            let _ = fs::copy(&backup, &full);
+        } else {
+            let _ = fs::remove_file(&full);
+        }
+    }
+}
+
+pub fn revert(attempt_dir: &Path, job_dir: &Path) -> Result<usize, ApplyError> {
+    let body = fs::read_to_string(attempt_dir.join("applied.tsv"))
+        .map_err(|error| apply_error(format!("no applied record: {error}")))?;
+    let mut restored = 0usize;
+    for line in body.lines() {
+        let mut parts = line.split('\t');
+        let Some(raw) = parts.next() else {
+            continue;
+        };
+        let kind = parts.next().unwrap_or("replaced");
+        let rel = normalize_path(raw).map_err(|refusal| apply_error(refusal.to_string()))?;
+        let full = job_dir.join(&rel);
+        if kind == "created" {
+            if full.exists() {
+                fs::remove_file(&full).map_err(|error| {
+                    apply_error(format!("cannot remove '{}': {error}", full.display()))
+                })?;
+                restored += 1;
+            }
+        } else {
+            let backup = attempt_dir.join("backup").join(&rel);
+            if !backup.is_file() {
+                return Err(apply_error(format!(
+                    "backup '{}' is missing",
+                    backup.display()
+                )));
+            }
+            let permissions = fs::metadata(&backup).ok().map(|meta| meta.permissions());
+            fs::copy(&backup, &full).map_err(|error| {
+                apply_error(format!("cannot restore '{}': {error}", full.display()))
+            })?;
+            if let Some(permissions) = permissions {
+                let _ = fs::set_permissions(&full, permissions);
+            }
+            restored += 1;
+        }
+    }
+    let _ = fs::write(
+        attempt_dir.join("reverted"),
+        format!("{}\n", clock::iso_now()),
+    );
+    Ok(restored)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fingerprint {
+    entries: Vec<(PathBuf, u64, u64)>,
+}
+
+/// A metadata snapshot of everything an agent must not edit during its run.
+/// The `state/heal/` directory is excluded because the runner and the manager
+/// write the prompt, proposal and log there on purpose.
+pub fn fingerprint(repo: &Path, paths: &Paths) -> Fingerprint {
+    let mut entries = Vec::new();
+    let skip = paths.state.join("heal");
+    walk_fingerprint(repo, &paths.dir, Some(&skip), &mut entries);
+    walk_fingerprint(repo, &repo.join("lib"), None, &mut entries);
+    walk_fingerprint(repo, &repo.join("spec"), None, &mut entries);
+    let policy = repo.join("triage.conf");
+    if let Ok(meta) = fs::metadata(&policy) {
+        entries.push((
+            policy.strip_prefix(repo).unwrap_or(&policy).to_path_buf(),
+            meta.len(),
+            modified(meta),
+        ));
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries.dedup_by(|a, b| a.0 == b.0);
+    Fingerprint { entries }
+}
+
+fn walk_fingerprint(
+    repo: &Path,
+    dir: &Path,
+    skip: Option<&Path>,
+    out: &mut Vec<(PathBuf, u64, u64)>,
+) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if skip.map(|skip| path == skip).unwrap_or(false) {
+            continue;
+        }
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.is_dir() {
+            walk_fingerprint(repo, &path, skip, out);
+        } else {
+            out.push((
+                path.strip_prefix(repo).unwrap_or(&path).to_path_buf(),
+                meta.len(),
+                modified(meta),
+            ));
+        }
+    }
+}
+
+fn modified(meta: fs::Metadata) -> u64 {
+    meta.modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
+pub fn first_change(before: &Fingerprint, after: &Fingerprint) -> Option<String> {
+    let mut left = before.entries.iter().peekable();
+    let mut right = after.entries.iter().peekable();
+    loop {
+        match (left.peek(), right.peek()) {
+            (None, None) => return None,
+            (Some(_), None) => return left.next().map(|(path, _, _)| path.display().to_string()),
+            (None, Some(_)) => return right.next().map(|(path, _, _)| path.display().to_string()),
+            (Some(a), Some(b)) => match a.0.cmp(&b.0) {
+                std::cmp::Ordering::Less => {
+                    return Some(a.0.display().to_string());
+                }
+                std::cmp::Ordering::Greater => {
+                    return Some(b.0.display().to_string());
+                }
+                std::cmp::Ordering::Equal => {
+                    if a.1 != b.1 || a.2 != b.2 {
+                        return Some(a.0.display().to_string());
+                    }
+                    left.next();
+                    right.next();
+                }
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -938,6 +1267,72 @@ mod tests {
 
     fn allow_out() -> Vec<PathBuf> {
         vec![PathBuf::from("out")]
+    }
+
+    #[test]
+    fn apply_backs_up_and_replaces() {
+        let dir = job_dir("apply-ok");
+        let attempt = dir.join("attempt");
+        fs::create_dir_all(&attempt).unwrap();
+        fs::write(dir.join("out/a.txt"), "before").unwrap();
+        let edits = vec![Edit {
+            path: PathBuf::from("out/a.txt"),
+            kind: EditKind::Content("after".into()),
+        }];
+        let applied = apply(&attempt, &dir, &edits).expect("apply");
+        assert_eq!(fs::read_to_string(dir.join("out/a.txt")).unwrap(), "after");
+        assert_eq!(
+            fs::read_to_string(attempt.join("backup/out/a.txt")).unwrap(),
+            "before"
+        );
+        assert_eq!(applied.edited.len(), 1);
+        assert!(applied.created.is_empty());
+    }
+
+    #[test]
+    fn apply_rolls_back_when_a_later_edit_fails() {
+        let dir = job_dir("apply-rollback");
+        let attempt = dir.join("attempt");
+        fs::create_dir_all(&attempt).unwrap();
+        fs::write(dir.join("out/a.txt"), "before").unwrap();
+        fs::create_dir_all(dir.join("out/b")).unwrap();
+        let edits = vec![
+            Edit {
+                path: PathBuf::from("out/a.txt"),
+                kind: EditKind::Content("after".into()),
+            },
+            Edit {
+                path: PathBuf::from("out/b"),
+                kind: EditKind::Content("nope".into()),
+            },
+        ];
+        assert!(apply(&attempt, &dir, &edits).is_err());
+        assert_eq!(fs::read_to_string(dir.join("out/a.txt")).unwrap(), "before");
+        assert!(!attempt.join("applied.tsv").exists());
+    }
+
+    #[test]
+    fn revert_restores_replaced_and_removes_created() {
+        let dir = job_dir("revert");
+        let attempt = dir.join("attempt");
+        fs::create_dir_all(&attempt).unwrap();
+        fs::write(dir.join("out/a.txt"), "before").unwrap();
+        let edits = vec![
+            Edit {
+                path: PathBuf::from("out/a.txt"),
+                kind: EditKind::Content("after".into()),
+            },
+            Edit {
+                path: PathBuf::from("out/new.txt"),
+                kind: EditKind::Content("new".into()),
+            },
+        ];
+        apply(&attempt, &dir, &edits).expect("apply");
+        assert_eq!(fs::read_to_string(dir.join("out/new.txt")).unwrap(), "new");
+        let restored = revert(&attempt, &dir).expect("revert");
+        assert_eq!(restored, 2);
+        assert_eq!(fs::read_to_string(dir.join("out/a.txt")).unwrap(), "before");
+        assert!(!dir.join("out/new.txt").exists());
     }
 
     #[test]

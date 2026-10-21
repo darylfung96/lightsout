@@ -388,6 +388,17 @@ pub fn build(repo: &Path, paths: &Paths) -> String {
         lines.push("- `out/` is empty: no artifact was produced.".into());
     }
 
+    let heal_history = state::lines(&paths.state.join("heal").join("history.tsv"));
+    if !heal_history.is_empty() {
+        lines.push("## Repair attempts".into());
+        lines.push(String::new());
+        lines.push("```tsv".into());
+        let start = heal_history.len().saturating_sub(10);
+        lines.extend(heal_history[start..].iter().cloned());
+        lines.push("```".into());
+        lines.push(String::new());
+    }
+
     lines.push("## Next commands".into());
     lines.push(String::new());
     match block.as_ref().map(|b| b.class.as_str()) {

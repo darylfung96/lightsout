@@ -417,9 +417,13 @@ fn block_ready(s: &Sandbox) {
     assert_eq!(code(&out), 2, "block ready: {}", combined(&out));
 }
 
+fn fake_proposal_named(s: &Sandbox, name: &str, body: &str) -> String {
+    s.write(name, body);
+    s.path(name).to_string_lossy().into_owned()
+}
+
 fn fake_proposal(s: &Sandbox, body: &str) -> String {
-    s.write("proposal-input.json", body);
-    s.path("proposal-input.json").to_string_lossy().into_owned()
+    fake_proposal_named(s, "proposal-input.json", body)
 }
 
 fn run_heal(s: &Sandbox, proposal: &str) -> std::process::Output {
@@ -748,5 +752,310 @@ fn a_symlinked_allow_prefix_is_refused() {
     assert!(
         !s.exists("outside/x"),
         "nothing is written through the link"
+    );
+}
+
+fn proposal_editing_ready(s: &Sandbox, content: &str) -> String {
+    fake_proposal(
+        s,
+        &format!(
+            r#"{{"fixable":true,"summary":"write ready","edits":[{{"path":"out/ready","content":"{content}"}}]}}"#
+        ),
+    )
+}
+
+#[test]
+fn heal_apply_applies_the_proposal_and_reruns() {
+    let s = Sandbox::new("ar-heal-apply");
+    ready_job(&s, false);
+    propose_policy(&s);
+    block_ready(&s);
+    let proposal = proposal_editing_ready(&s, "after");
+
+    let proposed = run_heal(&s, &proposal);
+    assert_eq!(code(&proposed), 2, "propose exits 2");
+
+    let applied = s.run(&["heal", "ready", "--apply"]);
+    assert_eq!(code(&applied), 0, "apply exits 0: {}", combined(&applied));
+    assert_eq!(s.read("jobs/ready/out/ready"), "after");
+    assert!(s.is_file(&format!("jobs/ready/state/done/{}", s.today())));
+    let history = s.read("jobs/ready/state/heal/history.tsv");
+    assert!(history.contains("\tapply\t"), "apply recorded: {history}");
+    assert!(history.contains("passed"), "rerun recorded: {history}");
+}
+
+#[test]
+fn heal_revert_restores_the_original() {
+    let s = Sandbox::new("ar-heal-revert");
+    ready_job(&s, false);
+    propose_policy(&s);
+    block_ready(&s);
+    s.write("jobs/ready/out/ready", "before");
+    let proposal = proposal_editing_ready(&s, "after");
+
+    assert_eq!(code(&run_heal(&s, &proposal)), 2);
+    assert_eq!(code(&s.run(&["heal", "ready", "--apply"])), 0);
+    assert_eq!(s.read("jobs/ready/out/ready"), "after");
+
+    let reverted = s.run(&["heal", "ready", "--revert", "1"]);
+    assert_eq!(
+        code(&reverted),
+        0,
+        "revert exits 0: {}",
+        combined(&reverted)
+    );
+    assert_eq!(s.read("jobs/ready/out/ready"), "before");
+    assert!(s.is_file(&format!(
+        "jobs/ready/state/heal/{}/attempt-1/reverted",
+        s.today()
+    )));
+}
+
+#[test]
+fn heal_apply_without_a_proposal_is_refused() {
+    let s = Sandbox::new("ar-heal-apply-none");
+    ready_job(&s, true);
+    block_ready(&s);
+    let out = s.run(&["heal", "ready", "--apply"]);
+    assert_eq!(code(&out), 2, "no proposal exits 2");
+    assert!(combined(&out).contains("no stored proposal"));
+}
+
+#[test]
+fn heal_revert_unknown_attempt_is_refused() {
+    let s = Sandbox::new("ar-heal-revert-none");
+    ready_job(&s, true);
+    block_ready(&s);
+    let out = s.run(&["heal", "ready", "--revert", "7"]);
+    assert_eq!(code(&out), 2, "missing attempt exits 2");
+    assert!(combined(&out).contains("no attempt-7"));
+}
+
+fn apply_policy(s: &Sandbox) {
+    s.write("triage.conf", "ready gate:ready agent:apply\n");
+}
+
+fn auto_env<'a>(proposal: &'a str, log: &'a str) -> Vec<(&'a str, &'a str)> {
+    vec![
+        ("U_RUNNER", "fake"),
+        ("FAKE_AGENT_PROPOSAL", proposal),
+        ("FAKE_AGENT_LOG", log),
+    ]
+}
+
+#[test]
+fn auto_apply_fixes_and_passes() {
+    let s = Sandbox::new("ar-auto-apply");
+    ready_job(&s, false);
+    apply_policy(&s);
+    let proposal = proposal_editing_ready(&s, "after");
+    let log = s.path("agent.log").to_string_lossy().into_owned();
+
+    let out = s.run_env(
+        &["run", "ready", "--auto-repair"],
+        &auto_env(&proposal, &log),
+    );
+    assert_eq!(code(&out), 0, "auto apply passes: {}", combined(&out));
+    assert_eq!(s.read("jobs/ready/out/ready"), "after");
+    let history = s.read("jobs/ready/state/heal/history.tsv");
+    assert!(history.contains("agent:apply"), "apply recorded: {history}");
+    assert!(history.contains("passed"), "pass recorded: {history}");
+    assert_eq!(s.read(&log).lines().count(), 1, "one agent call");
+}
+
+#[test]
+fn auto_apply_stops_on_the_same_failure() {
+    let s = Sandbox::new("ar-auto-apply-stop");
+    ready_job(&s, true);
+    apply_policy(&s);
+    let proposal = fake_proposal(
+        &s,
+        r#"{"fixable":true,"summary":"irrelevant","edits":[{"path":"out/unrelated","content":"x"}]}"#,
+    );
+    let log = s.path("agent.log").to_string_lossy().into_owned();
+
+    let out = s.run_env(
+        &["run", "ready", "--auto-repair"],
+        &auto_env(&proposal, &log),
+    );
+    assert_eq!(code(&out), 2, "same failure stops: {}", combined(&out));
+    let history = s.read("jobs/ready/state/heal/history.tsv");
+    assert!(history.contains("no-progress"), "verdict: {history}");
+    assert_eq!(s.read(&log).lines().count(), 1, "no second agent call");
+}
+
+#[test]
+fn auto_apply_continues_when_the_failure_changes() {
+    let s = Sandbox::new("ar-auto-apply-change");
+    s.write(
+        "jobs/two/job.sh",
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+. "$REPO/lib/guards.sh"
+if [ ! -f "$OUT/a" ]; then
+  u_block --class judgment --source gate:a "a missing"
+fi
+if [ ! -f "$OUT/b" ]; then
+  u_block --class judgment --source gate:b "b missing"
+fi
+u_done
+"#,
+    );
+    s.write(
+        "triage.conf",
+        "two gate:a agent:apply\ntwo gate:b agent:apply\n",
+    );
+    let first = fake_proposal_named(
+        &s,
+        "proposal-a.json",
+        r#"{"fixable":true,"summary":"a","edits":[{"path":"out/a","content":"a"}]}"#,
+    );
+    let second = fake_proposal_named(
+        &s,
+        "proposal-b.json",
+        r#"{"fixable":true,"summary":"b","edits":[{"path":"out/b","content":"b"}]}"#,
+    );
+    let seq = format!("{first}:{second}");
+    let state = s.path("agent-count").to_string_lossy().into_owned();
+    let log = s.path("agent.log").to_string_lossy().into_owned();
+
+    let out = s.run_env(
+        &["run", "two", "--auto-repair"],
+        &[
+            ("U_RUNNER", "fake"),
+            ("FAKE_AGENT_PROPOSAL_SEQ", &seq),
+            ("FAKE_AGENT_STATE", &state),
+            ("FAKE_AGENT_LOG", &log),
+            ("MAX_HEALS", "2"),
+        ],
+    );
+    assert_eq!(code(&out), 0, "changed key continues: {}", combined(&out));
+    assert_eq!(s.read("jobs/two/out/a"), "a");
+    assert_eq!(s.read("jobs/two/out/b"), "b");
+    assert_eq!(s.read(&log).lines().count(), 2, "two agent calls");
+}
+
+#[test]
+fn auto_apply_respects_the_caps() {
+    let s = Sandbox::new("ar-auto-apply-cap");
+    ready_job(&s, true);
+    apply_policy(&s);
+    let proposal = proposal_editing_ready(&s, "after");
+    let log = s.path("agent.log").to_string_lossy().into_owned();
+
+    let out = s.run_env(
+        &["run", "ready", "--auto-repair"],
+        &[
+            ("U_RUNNER", "fake"),
+            ("FAKE_AGENT_PROPOSAL", &proposal),
+            ("FAKE_AGENT_LOG", &log),
+            ("MAX_HEALS", "0"),
+        ],
+    );
+    assert_eq!(code(&out), 2, "job cap exits 2");
+    assert!(combined(&out).contains("heal cap"));
+    assert!(!s.path("agent.log").exists(), "no agent call");
+
+    s.write(
+        &format!("logs/heal/{}.tsv", s.today()),
+        "2026-10-21T09:00:00-05:00\tother\tagent:apply\n",
+    );
+    let out = s.run_env(
+        &["run", "ready", "--auto-repair"],
+        &[
+            ("U_RUNNER", "fake"),
+            ("FAKE_AGENT_PROPOSAL", &proposal),
+            ("FAKE_AGENT_LOG", &log),
+            ("MAX_HEALS_TOTAL", "1"),
+        ],
+    );
+    assert_eq!(code(&out), 2, "workspace cap exits 2");
+    assert!(
+        combined(&out).contains("workspace heal cap"),
+        "workspace cap: {}",
+        combined(&out)
+    );
+}
+
+#[test]
+fn auto_apply_refuses_a_tampering_runner() {
+    let s = Sandbox::new("ar-auto-apply-violation");
+    ready_job(&s, true);
+    apply_policy(&s);
+    let proposal = proposal_editing_ready(&s, "after");
+    let job = s.path("jobs/ready/job.sh").to_string_lossy().into_owned();
+
+    let out = s.run_env(
+        &["run", "ready", "--auto-repair"],
+        &[
+            ("U_RUNNER", "fake"),
+            ("FAKE_AGENT_PROPOSAL", &proposal),
+            ("FAKE_AGENT_TOUCH", &job),
+        ],
+    );
+    assert_eq!(code(&out), 2, "violation exits 2");
+    let history = s.read("jobs/ready/state/heal/history.tsv");
+    assert!(history.contains("violation"), "verdict: {history}");
+    assert!(!s.is_file("jobs/ready/out/ready"), "nothing applied");
+}
+
+#[test]
+fn heal_uses_apply_for_an_apply_policy() {
+    let s = Sandbox::new("ar-heal-apply-default");
+    ready_job(&s, false);
+    apply_policy(&s);
+    block_ready(&s);
+    let proposal = proposal_editing_ready(&s, "after");
+
+    let out = s.run_env(
+        &["heal", "ready"],
+        &[("U_RUNNER", "fake"), ("FAKE_AGENT_PROPOSAL", &proposal)],
+    );
+    assert_eq!(code(&out), 0, "heal apply exits 0: {}", combined(&out));
+    assert_eq!(s.read("jobs/ready/out/ready"), "after");
+}
+
+#[test]
+fn diagnose_lists_repair_attempts() {
+    let s = Sandbox::new("ar-diagnose-attempts");
+    ready_job(&s, true);
+    apply_policy(&s);
+    let proposal = fake_proposal(
+        &s,
+        r#"{"fixable":true,"summary":"irrelevant","edits":[{"path":"out/unrelated","content":"x"}]}"#,
+    );
+    let log = s.path("agent.log").to_string_lossy().into_owned();
+    s.run_env(
+        &["run", "ready", "--auto-repair"],
+        &auto_env(&proposal, &log),
+    );
+
+    let out = s.run(&["diagnose", "ready"]);
+    assert_eq!(code(&out), 0);
+    let report = s.read("jobs/ready/state/diagnosis.md");
+    assert!(report.contains("Repair attempts"), "section present");
+    assert!(report.contains("no-progress"), "verdict present");
+}
+
+#[test]
+fn status_reports_heal_attempts() {
+    let s = Sandbox::new("ar-status-heals");
+    ready_job(&s, true);
+    propose_policy(&s);
+    let proposal = proposal_editing_ready(&s, "after");
+    block_ready(&s);
+    assert_eq!(code(&run_heal(&s, &proposal)), 2);
+
+    let row = s.row("ready");
+    assert_eq!(
+        row.get("heal_attempts_today").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert!(
+        row.get("last_heal")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .contains("agent:propose"),
+        "last heal is recorded: {row}"
     );
 }

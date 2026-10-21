@@ -43,9 +43,11 @@ pub const USAGE: &str = "usage: lightsout [--workspace DIR] <verb> [name]
   triage <name> [--json]
                        show how the current block routes through triage.conf;
                        writes nothing
-  heal <name>
+  heal <name> [--apply | --revert N]
                        run one agent repair attempt for the current block;
-                       writes a proposal, changes no artifact
+                       writes a proposal, changes no artifact; --apply applies
+                       the latest validated proposal and reruns; --revert N
+                       restores attempt N's backup
   resume <name>        same as run
   unblock <name>       clear a blocked marker after a human looks
   gate <gate> [opts]   artifact gates (see lightsout gate --help)
@@ -709,14 +711,28 @@ fn heal_loop(
                 continue;
             }
             triage::Action::AgentPropose => {
-                return agent_attempt(repo, paths, &blocked, "agent:propose", lock);
+                return agent_attempt(repo, paths, &blocked, "agent:propose", lock, false);
             }
             triage::Action::AgentApply => {
-                println!(
-                    "auto-repair: agent:apply is not enabled yet; leaving {} for a human",
-                    paths.name
-                );
-                return 2;
+                let before = triage::failure_key(&blocked);
+                let rc = agent_attempt(repo, paths, &blocked, "agent:apply", lock, true);
+                if rc != 2 {
+                    return rc;
+                }
+                let next = state::blocked_marker(&paths.state.join("blocked"));
+                let after = next
+                    .as_ref()
+                    .map(triage::failure_key)
+                    .unwrap_or_else(|| "done".to_string());
+                if after == before {
+                    return 2;
+                }
+                attempts += 1;
+                blocked = match next {
+                    Some(next) => next,
+                    None => return 2,
+                };
+                continue;
             }
         }
     }
@@ -753,6 +769,7 @@ fn agent_attempt(
     blocked: &state::Blocked,
     action: &str,
     lock: &heal::Lock,
+    apply: bool,
 ) -> i32 {
     let used = triage::heal_count(&paths.state);
     let max = triage::max_heals();
@@ -814,7 +831,16 @@ fn agent_attempt(
         return 2;
     }
 
+    let before_files = heal::fingerprint(repo, paths);
     let outcome = heal::call_agent(paths, &attempt, &prompt_path, timeout);
+    let after_files = heal::fingerprint(repo, paths);
+    if let Some(path) = heal::first_change(&before_files, &after_files) {
+        record_heal(paths, &attempt, action, &before, &before, "violation", 2);
+        eprintln!(
+            "heal: the runner changed '{path}' during the attempt; the proposal is not applied"
+        );
+        return 2;
+    }
     match outcome {
         heal::AgentOutcome::Proposal(value) => {
             let allow: Vec<std::path::PathBuf> = heal::allowed_prefixes(&paths.dir)
@@ -845,6 +871,40 @@ fn agent_attempt(
                     .unwrap_or("the agent declined to propose a fix");
                 println!("unfixable: {summary}");
                 return 2;
+            }
+            if apply {
+                let applied = match heal::apply(&attempt.dir, &paths.dir, &edits) {
+                    Ok(applied) => applied,
+                    Err(error) => {
+                        record_heal(paths, &attempt, action, &before, &before, "apply-failed", 2);
+                        eprintln!("heal: apply failed ({error})");
+                        return 2;
+                    }
+                };
+                let rc = run_job(repo, &paths.name, "run", false, None, None, true);
+                let next = state::blocked_marker(&paths.state.join("blocked"));
+                let after = next
+                    .as_ref()
+                    .map(triage::failure_key)
+                    .unwrap_or_else(|| "done".to_string());
+                let verdict = if rc == 0 {
+                    "passed"
+                } else if rc == 2 && after == before {
+                    "no-progress"
+                } else if rc == 2 {
+                    "blocked"
+                } else {
+                    "failed"
+                };
+                record_heal(paths, &attempt, action, &before, &after, verdict, rc);
+                println!(
+                    "heal: applied {} edit(s); rerun exit {rc}",
+                    applied.edited.len()
+                );
+                if rc == 2 && after == before {
+                    println!("heal: the same failure returned; stopping");
+                }
+                return rc;
             }
             record_heal(paths, &attempt, action, &before, &before, "proposed", 0);
             println!("proposal: {}", attempt.dir.join("proposal.json").display());
@@ -885,20 +945,225 @@ fn agent_attempt(
     }
 }
 
-pub fn heal(repo: &Path, argv: &[String]) -> i32 {
-    let Some(name) = argv.first() else {
-        println!("{}", USAGE);
-        return 64;
-    };
-    if argv.len() > 1 {
-        eprintln!("heal: unknown option: {}", argv[1]);
-        return 64;
+fn latest_proposal(paths: &Paths) -> Option<(usize, std::path::PathBuf)> {
+    let base = paths.state.join("heal").join(clock::today());
+    let entries = fs::read_dir(base).ok()?;
+    let mut best: Option<(usize, std::path::PathBuf)> = None;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(number) = name.strip_prefix("attempt-") else {
+            continue;
+        };
+        let Ok(number) = number.parse::<usize>() else {
+            continue;
+        };
+        let proposal = entry.path().join("proposal.json");
+        if !proposal.is_file() {
+            continue;
+        }
+        if best
+            .as_ref()
+            .map(|(best, _)| number > *best)
+            .unwrap_or(true)
+        {
+            best = Some((number, entry.path()));
+        }
     }
+    best
+}
+
+fn heal_apply(repo: &Path, name: &str) -> i32 {
     if !repo.join("jobs").join(name).join("job.sh").is_file() {
         eprintln!("no such job: {name}");
         return 64;
     }
     let paths = job_env(repo, name);
+    let Some(blocked) = state::blocked_marker(&paths.state.join("blocked")) else {
+        println!("{name} is not blocked; nothing to apply");
+        return 0;
+    };
+    let lock = match heal::Lock::acquire(&paths.state) {
+        heal::LockResult::Acquired(lock) => lock,
+        heal::LockResult::Held { pid, expiry } => {
+            println!(
+                "held: auto-repair lock is held by pid {pid} until {}",
+                clock::iso(expiry)
+            );
+            return 0;
+        }
+        heal::LockResult::Failed(error) => {
+            eprintln!("heal: {error}");
+            return 2;
+        }
+    };
+    let Some((number, attempt_dir)) = latest_proposal(&paths) else {
+        println!("heal: no stored proposal for {name} today");
+        return 2;
+    };
+    let body = fs::read_to_string(attempt_dir.join("proposal.json")).unwrap_or_default();
+    let proposal: Value = match serde_json::from_str(&body) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("heal: cannot parse attempt-{number}/proposal.json: {error}");
+            return 2;
+        }
+    };
+    let allow: Vec<std::path::PathBuf> = heal::allowed_prefixes(&paths.dir)
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+    let edits = match heal::validate(&paths.dir, &allow, &proposal) {
+        Ok(edits) => edits,
+        Err(refusal) => {
+            eprintln!("heal: proposal refused ({refusal})");
+            return 2;
+        }
+    };
+    if edits.is_empty() {
+        println!("heal: attempt-{number} is unfixable; nothing to apply");
+        return 2;
+    }
+    let applied = match heal::apply(&attempt_dir, &paths.dir, &edits) {
+        Ok(applied) => applied,
+        Err(error) => {
+            eprintln!("heal: apply failed ({error})");
+            return 2;
+        }
+    };
+    let _ = fs::write(attempt_dir.join("verdict"), "applied\n");
+    lock.refresh();
+
+    let before = triage::failure_key(&blocked);
+    let rc = run_job(repo, name, "apply", false, None, None, true);
+    let next = state::blocked_marker(&paths.state.join("blocked"));
+    let after = next
+        .as_ref()
+        .map(triage::failure_key)
+        .unwrap_or_else(|| "done".to_string());
+    let verdict = if rc == 0 {
+        "passed"
+    } else if rc == 2 {
+        "blocked"
+    } else {
+        "failed"
+    };
+    record_heal(
+        &paths,
+        &heal::Attempt {
+            number,
+            dir: attempt_dir.clone(),
+            started: clock::now_epoch(),
+        },
+        "apply",
+        &before,
+        &after,
+        verdict,
+        rc,
+    );
+    println!(
+        "heal: applied {} edit(s) from attempt-{number}; rerun exit {rc}",
+        applied.edited.len()
+    );
+    rc
+}
+
+fn heal_revert(repo: &Path, name: &str, number: usize) -> i32 {
+    if !repo.join("jobs").join(name).join("job.sh").is_file() {
+        eprintln!("no such job: {name}");
+        return 64;
+    }
+    let paths = job_env(repo, name);
+    let _lock = match heal::Lock::acquire(&paths.state) {
+        heal::LockResult::Acquired(lock) => lock,
+        heal::LockResult::Held { pid, expiry } => {
+            println!(
+                "held: auto-repair lock is held by pid {pid} until {}",
+                clock::iso(expiry)
+            );
+            return 0;
+        }
+        heal::LockResult::Failed(error) => {
+            eprintln!("heal: {error}");
+            return 2;
+        }
+    };
+    let attempt_dir = paths
+        .state
+        .join("heal")
+        .join(clock::today())
+        .join(format!("attempt-{number}"));
+    if !attempt_dir.is_dir() {
+        eprintln!("heal: no attempt-{number} today");
+        return 2;
+    }
+    match heal::revert(&attempt_dir, &paths.dir) {
+        Ok(restored) => {
+            println!("heal: restored {restored} path(s) from attempt-{number}");
+            0
+        }
+        Err(error) => {
+            eprintln!("heal: revert failed ({error})");
+            2
+        }
+    }
+}
+
+pub fn heal(repo: &Path, argv: &[String]) -> i32 {
+    let Some(name) = argv.first() else {
+        println!("{}", USAGE);
+        return 64;
+    };
+    let mut apply = false;
+    let mut revert: Option<usize> = None;
+    let mut i = 1;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--apply" => apply = true,
+            "--revert" => {
+                let Some(value) = argv.get(i + 1) else {
+                    eprintln!("--revert needs an attempt number");
+                    return 64;
+                };
+                match value.parse::<usize>() {
+                    Ok(number) if number > 0 => revert = Some(number),
+                    _ => {
+                        eprintln!("--revert needs a positive attempt number");
+                        return 64;
+                    }
+                }
+                i += 1;
+            }
+            other if other.starts_with("--revert=") => {
+                match other["--revert=".len()..].parse::<usize>() {
+                    Ok(number) if number > 0 => revert = Some(number),
+                    _ => {
+                        eprintln!("--revert needs a positive attempt number");
+                        return 64;
+                    }
+                }
+            }
+            other => {
+                eprintln!("heal: unknown option: {other}");
+                return 64;
+            }
+        }
+        i += 1;
+    }
+    if apply && revert.is_some() {
+        eprintln!("heal: choose --apply or --revert, not both");
+        return 64;
+    }
+    if let Some(number) = revert {
+        return heal_revert(repo, name, number);
+    }
+    if apply {
+        return heal_apply(repo, name);
+    }
+    let paths = job_env(repo, name);
+    if !paths.has_job() {
+        eprintln!("no such job: {name}");
+        return 64;
+    }
     let Some(blocked) = state::blocked_marker(&paths.state.join("blocked")) else {
         println!("{name} is not blocked; nothing to heal");
         return 0;
@@ -935,8 +1200,21 @@ pub fn heal(repo: &Path, argv: &[String]) -> i32 {
             2
         }
         triage::Action::AgentApply => {
-            println!("heal: agent:apply is not enabled yet; use agent:propose");
-            2
+            let lock = match heal::Lock::acquire(&paths.state) {
+                heal::LockResult::Acquired(lock) => lock,
+                heal::LockResult::Held { pid, expiry } => {
+                    println!(
+                        "held: auto-repair lock is held by pid {pid} until {}",
+                        clock::iso(expiry)
+                    );
+                    return 0;
+                }
+                heal::LockResult::Failed(error) => {
+                    eprintln!("heal: {error}");
+                    return 2;
+                }
+            };
+            agent_attempt(repo, &paths, &blocked, "agent:apply", &lock, true)
         }
         triage::Action::AgentPropose => {
             let lock = match heal::Lock::acquire(&paths.state) {
@@ -953,7 +1231,7 @@ pub fn heal(repo: &Path, argv: &[String]) -> i32 {
                     return 2;
                 }
             };
-            agent_attempt(repo, &paths, &blocked, "agent:propose", &lock)
+            agent_attempt(repo, &paths, &blocked, "agent:propose", &lock, false)
         }
     }
 }

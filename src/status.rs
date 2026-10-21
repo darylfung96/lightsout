@@ -24,6 +24,8 @@ pub struct JobState {
     pub since: Option<String>,
     pub stage: String,
     pub attempts_today: i64,
+    pub heal_attempts_today: usize,
+    pub last_heal: Option<String>,
     pub spend_today: i64,
     pub last_exit: Option<i64>,
     pub last_run: Option<String>,
@@ -52,6 +54,10 @@ fn job_state(repo: &Path, name: &str) -> JobState {
         since: None,
         stage: String::new(),
         attempts_today: state::attempts_today(&st, &today),
+        heal_attempts_today: crate::triage::heal_count(&st),
+        last_heal: state::lines(&st.join("heal").join("history.tsv"))
+            .last()
+            .cloned(),
         spend_today: state::spend_today(&st, &today),
         last_exit: None,
         last_run: None,
@@ -200,6 +206,8 @@ fn to_json(rec: &JobState) -> Value {
         "since": rec.since,
         "stage": rec.stage,
         "attempts_today": rec.attempts_today,
+        "heal_attempts_today": rec.heal_attempts_today,
+        "last_heal": rec.last_heal,
         "spend_today": rec.spend_today,
         "last_exit": rec.last_exit,
         "last_run": rec.last_run,
@@ -243,7 +251,7 @@ fn html_table(data: &[JobState]) -> String {
     for rec in data {
         let class = rec.state.replace(' ', "-");
         rows.push(format!(
-            "<tr class='{class}'><td><b>{}</b></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            "<tr class='{class}'><td><b>{}</b></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
             rec.name,
             rec.state,
             rec.detail,
@@ -251,11 +259,12 @@ fn html_table(data: &[JobState]) -> String {
             rec.last_run.as_deref().unwrap_or("—"),
             state::duration_text(rec.last_duration),
             runs_html(&rec.runs),
-            rec.attempts_today
+            rec.attempts_today,
+            rec.heal_attempts_today
         ));
     }
     if rows.is_empty() {
-        "<tr><td colspan=8>no jobs yet</td></tr>".into()
+        "<tr><td colspan=9>no jobs yet</td></tr>".into()
     } else {
         rows.join("\n")
     }
@@ -341,7 +350,7 @@ pub fn run(argv: &[String]) -> i32 {
              span.run{{font-size:.85rem;color:#555}}\n\
              caption{{text-align:left;font-weight:600;margin-bottom:.75rem}}\n\
              </style><table><caption>LightsOut — {}</caption>\n\
-             <tr><th>job</th><th>state</th><th>why</th><th>stage</th><th>last run</th><th>duration</th><th>last 5 runs</th><th>attempts</th></tr>\n\
+             <tr><th>job</th><th>state</th><th>why</th><th>stage</th><th>last run</th><th>duration</th><th>last 5 runs</th><th>attempts</th><th>heals</th></tr>\n\
              {}</table>",
             clock::format_epoch(clock::now_epoch(), "%Y-%m-%d %H:%M"),
             html_table(&data)

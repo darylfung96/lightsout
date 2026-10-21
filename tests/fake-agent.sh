@@ -32,13 +32,32 @@ fi
 if [ -n "${FAKE_AGENT_SLEEP:-}" ]; then
   sleep "$FAKE_AGENT_SLEEP"
 fi
-if [ -n "${FAKE_AGENT_PROPOSAL:-}" ]; then
+if [ -n "${FAKE_AGENT_PROPOSAL_SEQ:-}" ]; then
+  [ -n "${FAKE_AGENT_STATE:-}" ] || {
+    echo "fake-agent: FAKE_AGENT_PROPOSAL_SEQ needs FAKE_AGENT_STATE" >&2
+    exit 64
+  }
+  [ -n "${LIGHTSOUT_HEAL_OUT:-}" ] || {
+    echo "fake-agent: FAKE_AGENT_PROPOSAL_SEQ needs LIGHTSOUT_HEAL_OUT" >&2
+    exit 64
+  }
+  index=0
+  [ -f "$FAKE_AGENT_STATE" ] && index=$(cat "$FAKE_AGENT_STATE")
+  index=$((index + 1))
+  chosen=$(printf '%s' "$FAKE_AGENT_PROPOSAL_SEQ" | cut -d: -f"$index")
+  cp "$chosen" "$LIGHTSOUT_HEAL_OUT"
+  printf '%s\n' "$index" > "$FAKE_AGENT_STATE"
+  printf 'fake agent: proposal %s (sequence %s)\n' "$LIGHTSOUT_HEAL_OUT" "$index"
+elif [ -n "${FAKE_AGENT_PROPOSAL:-}" ]; then
   [ -n "${LIGHTSOUT_HEAL_OUT:-}" ] || {
     echo "fake-agent: FAKE_AGENT_PROPOSAL needs LIGHTSOUT_HEAL_OUT" >&2
     exit 64
   }
   cp "$FAKE_AGENT_PROPOSAL" "$LIGHTSOUT_HEAL_OUT"
   printf 'fake agent: proposal %s\n' "$LIGHTSOUT_HEAL_OUT"
+fi
+if [ -n "${FAKE_AGENT_TOUCH:-}" ]; then
+  printf 'tampered\n' >> "$FAKE_AGENT_TOUCH"
 fi
 out="${FAKE_AGENT_OUT:-$prompt.out}"
 printf 'fake agent: %s\n' "${prompt##*/}" > "$out"

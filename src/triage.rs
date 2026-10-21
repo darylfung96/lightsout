@@ -335,17 +335,14 @@ pub fn decide(policy: &Policy, job: &str, blocked: &Blocked) -> Resolution {
 }
 
 pub fn heal_count(state: &Path) -> usize {
-    let dir = state.join("heal").join(clock::today());
-    let Ok(entries) = fs::read_dir(&dir) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .filter(|entry| {
-            entry.file_name().to_string_lossy().starts_with("attempt-")
-                && state::read_lossy(&entry.path().join("meta.env"))
-                    .lines()
-                    .any(|line| line.starts_with("action=agent"))
+    let history = state.join("heal").join("history.tsv");
+    state::lines(&history)
+        .into_iter()
+        .filter(|line| {
+            line.split('\t')
+                .nth(3)
+                .map(|action| action.starts_with("agent"))
+                .unwrap_or(false)
         })
         .count()
 }
