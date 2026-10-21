@@ -90,7 +90,7 @@ ported checks, the workspace tests and the shell suite; `tests/install.sh` and
 release, and the first supervised `heal` on `everyday-laws`.
 
 
-## [2026-10-21] release | v0.2.0 publishes bounded auto-repair
+## [2026-10-21] decision | v0.2.0 publishes bounded auto-repair
 
 Merged `feat/auto-repair` into `main` and tagged `v0.2.0` at `4558957`. The
 release workflow built the four targets, published checksums plus `install.sh`,
