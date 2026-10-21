@@ -10,6 +10,8 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use serde_json::Value;
+
 use crate::clock;
 use crate::heal;
 use crate::repo::Paths;
@@ -41,6 +43,9 @@ pub const USAGE: &str = "usage: lightsout [--workspace DIR] <verb> [name]
   triage <name> [--json]
                        show how the current block routes through triage.conf;
                        writes nothing
+  heal <name>
+                       run one agent repair attempt for the current block;
+                       writes a proposal, changes no artifact
   resume <name>        same as run
   unblock <name>       clear a blocked marker after a human looks
   gate <gate> [opts]   artifact gates (see lightsout gate --help)
@@ -703,13 +708,236 @@ fn heal_loop(
                 };
                 continue;
             }
-            triage::Action::AgentPropose | triage::Action::AgentApply => {
+            triage::Action::AgentPropose => {
+                return agent_attempt(repo, paths, &blocked, "agent:propose", lock);
+            }
+            triage::Action::AgentApply => {
                 println!(
-                    "auto-repair: agent actions are not enabled yet; leaving {} for a human",
+                    "auto-repair: agent:apply is not enabled yet; leaving {} for a human",
                     paths.name
                 );
                 return 2;
             }
+        }
+    }
+}
+
+/// Record one agent attempt. The action label is `agent:propose` or
+/// `agent:apply`; the verdict is what the manager concluded from the runner.
+fn record_heal(
+    paths: &Paths,
+    attempt: &heal::Attempt,
+    action: &str,
+    before: &str,
+    after: &str,
+    verdict: &str,
+    rc: i32,
+) {
+    heal::record_attempt(
+        paths,
+        attempt,
+        &heal::Record {
+            action,
+            before_key: before,
+            after_key: after,
+            verdict,
+            rc,
+            cost: None,
+        },
+    );
+}
+
+fn agent_attempt(
+    repo: &Path,
+    paths: &Paths,
+    blocked: &state::Blocked,
+    action: &str,
+    lock: &heal::Lock,
+) -> i32 {
+    let used = triage::heal_count(&paths.state);
+    let max = triage::max_heals();
+    if used >= max {
+        println!(
+            "heal cap reached ({used} of {max} today) for {}",
+            paths.name
+        );
+        return 2;
+    }
+    if let Err(error) = heal::reserve_workspace_attempt(repo, &paths.name, action) {
+        eprintln!("heal: {error}");
+        return 2;
+    }
+    let attempt = match heal::begin_attempt(paths) {
+        Ok(attempt) => attempt,
+        Err(error) => {
+            eprintln!("heal: {error}");
+            return 2;
+        }
+    };
+    lock.refresh();
+    let before = triage::failure_key(blocked);
+    let timeout = match heal::timeout_seconds() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("{error}");
+            return 64;
+        }
+    };
+    let prompt = match heal::build_prompt(paths, blocked, &attempt) {
+        Ok(prompt) => prompt,
+        Err(error) => {
+            record_heal(
+                paths,
+                &attempt,
+                action,
+                &before,
+                &before,
+                "invalid:prompt",
+                2,
+            );
+            eprintln!("heal: {error}");
+            return 2;
+        }
+    };
+    let prompt_path = attempt.dir.join("prompt.md");
+    if let Err(error) = fs::write(&prompt_path, &prompt) {
+        record_heal(
+            paths,
+            &attempt,
+            action,
+            &before,
+            &before,
+            "invalid:prompt",
+            2,
+        );
+        eprintln!("heal: cannot write {}: {error}", prompt_path.display());
+        return 2;
+    }
+
+    let outcome = heal::call_agent(paths, &attempt, &prompt_path, timeout);
+    match outcome {
+        heal::AgentOutcome::Proposal(value) => {
+            let fixable = value
+                .get("fixable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !fixable {
+                record_heal(paths, &attempt, action, &before, &before, "unfixable", 0);
+                let summary = value
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .unwrap_or("the agent declined to propose a fix");
+                println!("unfixable: {summary}");
+                return 2;
+            }
+            record_heal(paths, &attempt, action, &before, &before, "proposed", 0);
+            println!("proposal: {}", attempt.dir.join("proposal.json").display());
+            println!("review it, then: lightsout heal {} --apply", paths.name);
+            2
+        }
+        heal::AgentOutcome::NoProposal(reason) => {
+            record_heal(
+                paths,
+                &attempt,
+                action,
+                &before,
+                &before,
+                "invalid:no-proposal",
+                2,
+            );
+            eprintln!("heal: {reason}");
+            2
+        }
+        heal::AgentOutcome::Timeout => {
+            record_heal(paths, &attempt, action, &before, &before, "timeout", 124);
+            println!("heal: the runner timed out; the block stands");
+            2
+        }
+        heal::AgentOutcome::RunnerFailed(code) => {
+            record_heal(
+                paths,
+                &attempt,
+                action,
+                &before,
+                &before,
+                "runner-failed",
+                code,
+            );
+            println!("heal: the runner failed with exit {code}; the block stands");
+            2
+        }
+    }
+}
+
+pub fn heal(repo: &Path, argv: &[String]) -> i32 {
+    let Some(name) = argv.first() else {
+        println!("{}", USAGE);
+        return 64;
+    };
+    if argv.len() > 1 {
+        eprintln!("heal: unknown option: {}", argv[1]);
+        return 64;
+    }
+    if !repo.join("jobs").join(name).join("job.sh").is_file() {
+        eprintln!("no such job: {name}");
+        return 64;
+    }
+    let paths = job_env(repo, name);
+    let Some(blocked) = state::blocked_marker(&paths.state.join("blocked")) else {
+        println!("{name} is not blocked; nothing to heal");
+        return 0;
+    };
+    let policy_file = triage::policy_path(repo);
+    let policy = match triage::Policy::load(&policy_file) {
+        Ok(policy) => policy,
+        Err(error) => {
+            eprintln!("{}: {error}", policy_file.display());
+            return 64;
+        }
+    };
+    if let Err(error) = policy.check_repairs(repo) {
+        eprintln!("{}: {error}", policy_file.display());
+        return 64;
+    }
+    let decision = triage::decide(&policy, name, &blocked);
+    match decision.action {
+        triage::Action::Human => {
+            println!(
+                "heal: the policy leaves {} for a human ({})",
+                paths.name,
+                decision
+                    .note
+                    .unwrap_or_else(|| "no rule matched".to_string())
+            );
+            2
+        }
+        triage::Action::Repair(repair) => {
+            println!(
+                "heal: the policy routes {} to repair:{repair}; use: lightsout retry {}",
+                paths.name, paths.name
+            );
+            2
+        }
+        triage::Action::AgentApply => {
+            println!("heal: agent:apply is not enabled yet; use agent:propose");
+            2
+        }
+        triage::Action::AgentPropose => {
+            let lock = match heal::Lock::acquire(&paths.state) {
+                heal::LockResult::Acquired(lock) => lock,
+                heal::LockResult::Held { pid, expiry } => {
+                    println!(
+                        "held: auto-repair lock is held by pid {pid} until {}",
+                        clock::iso(expiry)
+                    );
+                    return 0;
+                }
+                heal::LockResult::Failed(error) => {
+                    eprintln!("heal: {error}");
+                    return 2;
+                }
+            };
+            agent_attempt(repo, &paths, &blocked, "agent:propose", &lock)
         }
     }
 }

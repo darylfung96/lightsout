@@ -29,6 +29,17 @@ if [ "$rc" -ne 0 ]; then
   exit "$rc"
 fi
 [ -f "$prompt" ] || { echo "fake-agent: no prompt at $prompt" >&2; exit 66; }
+if [ -n "${FAKE_AGENT_SLEEP:-}" ]; then
+  sleep "$FAKE_AGENT_SLEEP"
+fi
+if [ -n "${FAKE_AGENT_PROPOSAL:-}" ]; then
+  [ -n "${LIGHTSOUT_HEAL_OUT:-}" ] || {
+    echo "fake-agent: FAKE_AGENT_PROPOSAL needs LIGHTSOUT_HEAL_OUT" >&2
+    exit 64
+  }
+  cp "$FAKE_AGENT_PROPOSAL" "$LIGHTSOUT_HEAL_OUT"
+  printf 'fake agent: proposal %s\n' "$LIGHTSOUT_HEAL_OUT"
+fi
 out="${FAKE_AGENT_OUT:-$prompt.out}"
 printf 'fake agent: %s\n' "${prompt##*/}" > "$out"
 printf 'fake agent: wrote %s\n' "$out"

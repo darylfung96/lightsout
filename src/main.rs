@@ -105,6 +105,7 @@ fn run(argv: &[String]) -> i32 {
             }
         },
         "retry" => with_workspace(|root| commands::retry(root, rest)),
+        "heal" => with_workspace(|root| commands::heal(root, rest)),
         "triage" => with_workspace(|root| triage::run(root, rest)),
         "run" | "resume" => run_verb(verb, rest),
         _ => {

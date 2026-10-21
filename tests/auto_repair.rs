@@ -407,3 +407,252 @@ fn plain_run_does_not_repair() {
     );
     assert!(!s.exists("jobs/ready/state/heal/history.tsv"));
 }
+
+fn propose_policy(s: &Sandbox) {
+    s.write("triage.conf", "ready gate:ready agent:propose\n");
+}
+
+fn block_ready(s: &Sandbox) {
+    let out = s.run(&["run", "ready"]);
+    assert_eq!(code(&out), 2, "block ready: {}", combined(&out));
+}
+
+fn fake_proposal(s: &Sandbox, body: &str) -> String {
+    s.write("proposal-input.json", body);
+    s.path("proposal-input.json").to_string_lossy().into_owned()
+}
+
+fn run_heal(s: &Sandbox, proposal: &str) -> std::process::Output {
+    s.run_env(
+        &["heal", "ready"],
+        &[("U_RUNNER", "fake"), ("FAKE_AGENT_PROPOSAL", proposal)],
+    )
+}
+
+#[test]
+fn heal_propose_writes_a_proposal_and_changes_nothing() {
+    let s = Sandbox::new("ar-heal-propose");
+    ready_job(&s, true);
+    propose_policy(&s);
+    block_ready(&s);
+    let proposal = fake_proposal(
+        &s,
+        r#"{"fixable":true,"summary":"write the ready marker","edits":[{"path":"out/ready","content":"ok"}]}"#,
+    );
+
+    let out = run_heal(&s, &proposal);
+    assert_eq!(code(&out), 2, "propose exits 2: {}", combined(&out));
+    assert!(
+        combined(&out).contains("proposal:"),
+        "proposal path printed"
+    );
+    assert!(
+        !s.exists("jobs/ready/out/ready"),
+        "propose changes no artifact"
+    );
+
+    let dir = format!("jobs/ready/state/heal/{}/attempt-1", s.today());
+    assert!(
+        s.is_file(&format!("{dir}/proposal.json")),
+        "proposal stored"
+    );
+    assert!(s.is_file(&format!("{dir}/prompt.md")), "prompt stored");
+    assert!(s.is_file(&format!("{dir}/runner.log")), "runner log stored");
+    let prompt = s.read(&format!("{dir}/prompt.md"));
+    assert!(prompt.contains("out/"), "allowed prefix is in the prompt");
+    assert!(prompt.contains("\"edits\""), "schema is in the prompt");
+    assert!(
+        s.read("jobs/ready/state/heal/history.tsv")
+            .contains("proposed"),
+        "history records the proposal"
+    );
+}
+
+#[test]
+fn heal_fixable_false_leaves_the_block() {
+    let s = Sandbox::new("ar-heal-unfixable");
+    ready_job(&s, true);
+    propose_policy(&s);
+    block_ready(&s);
+    let proposal = fake_proposal(
+        &s,
+        r#"{"fixable":false,"summary":"not safe to guess","edits":[]}"#,
+    );
+
+    let out = run_heal(&s, &proposal);
+    assert_eq!(code(&out), 2, "unfixable exits 2");
+    assert!(combined(&out).contains("unfixable"), "reason is printed");
+    assert!(s.is_file("jobs/ready/state/blocked"), "block remains");
+    assert!(
+        s.read("jobs/ready/state/heal/history.tsv")
+            .contains("unfixable"),
+        "verdict is unfixable"
+    );
+}
+
+#[test]
+fn heal_timeout_is_recorded() {
+    let s = Sandbox::new("ar-heal-timeout");
+    ready_job(&s, true);
+    propose_policy(&s);
+    block_ready(&s);
+    let proposal = fake_proposal(
+        &s,
+        r#"{"fixable":true,"summary":"late","edits":[{"path":"out/ready","content":"ok"}]}"#,
+    );
+
+    let out = s.run_env(
+        &["heal", "ready"],
+        &[
+            ("U_RUNNER", "fake"),
+            ("FAKE_AGENT_PROPOSAL", &proposal),
+            ("FAKE_AGENT_SLEEP", "5"),
+            ("U_AGENT_TIMEOUT", "1"),
+        ],
+    );
+    assert_eq!(code(&out), 2, "timeout exits 2: {}", combined(&out));
+    assert!(
+        combined(&out).contains("timed out"),
+        "timeout is reported: {}",
+        combined(&out)
+    );
+    assert!(
+        s.read("jobs/ready/state/heal/history.tsv")
+            .contains("timeout"),
+        "verdict is timeout"
+    );
+}
+
+#[test]
+fn heal_prompt_redacts_a_token() {
+    let s = Sandbox::new("ar-heal-redact");
+    ready_job(&s, true);
+    propose_policy(&s);
+    s.run(&["run", "ready"]);
+    s.append(
+        &format!("jobs/ready/logs/{}.log", s.today()),
+        "token sk-abcdef1234567890abcdef\n",
+    );
+    let proposal = fake_proposal(
+        &s,
+        r#"{"fixable":true,"summary":"ok","edits":[{"path":"out/ready","content":"ok"}]}"#,
+    );
+
+    let out = run_heal(&s, &proposal);
+    assert_eq!(code(&out), 2, "redaction run exits 2");
+    let prompt = s.read(&format!(
+        "jobs/ready/state/heal/{}/attempt-1/prompt.md",
+        s.today()
+    ));
+    assert!(
+        !prompt.contains("sk-abcdef1234567890abcdef"),
+        "token is absent from the prompt"
+    );
+    assert!(prompt.contains("[redacted]"), "redaction marker present");
+    let count: usize = s
+        .read(&format!(
+            "jobs/ready/state/heal/{}/attempt-1/redactions",
+            s.today()
+        ))
+        .trim()
+        .parse()
+        .unwrap_or(0);
+    assert!(count >= 1, "redaction count is recorded");
+}
+
+#[test]
+fn heal_respects_the_job_heal_cap() {
+    let s = Sandbox::new("ar-heal-cap");
+    ready_job(&s, true);
+    propose_policy(&s);
+    block_ready(&s);
+    let proposal = fake_proposal(
+        &s,
+        r#"{"fixable":true,"summary":"ok","edits":[{"path":"out/ready","content":"ok"}]}"#,
+    );
+
+    let out = s.run_env(
+        &["heal", "ready"],
+        &[
+            ("U_RUNNER", "fake"),
+            ("FAKE_AGENT_PROPOSAL", &proposal),
+            ("MAX_HEALS", "0"),
+        ],
+    );
+    assert_eq!(code(&out), 2, "cap exits 2");
+    assert!(combined(&out).contains("heal cap"), "cap is reported");
+    assert!(
+        !s.exists(&format!("jobs/ready/state/heal/{}/attempt-1", s.today())),
+        "no attempt dir"
+    );
+    assert!(!s.exists(&format!("logs/heal/{}.tsv", s.today())));
+}
+
+#[test]
+fn heal_respects_the_workspace_heal_cap() {
+    let s = Sandbox::new("ar-heal-ws-cap");
+    ready_job(&s, true);
+    propose_policy(&s);
+    block_ready(&s);
+    s.write(
+        &format!("logs/heal/{}.tsv", s.today()),
+        "2026-10-21T09:00:00-05:00\tother\tagent:apply\n",
+    );
+    let proposal = fake_proposal(
+        &s,
+        r#"{"fixable":true,"summary":"ok","edits":[{"path":"out/ready","content":"ok"}]}"#,
+    );
+
+    let out = s.run_env(
+        &["heal", "ready"],
+        &[
+            ("U_RUNNER", "fake"),
+            ("FAKE_AGENT_PROPOSAL", &proposal),
+            ("MAX_HEALS_TOTAL", "1"),
+        ],
+    );
+    assert_eq!(code(&out), 2, "workspace cap exits 2");
+    assert!(
+        combined(&out).contains("workspace heal cap"),
+        "workspace cap is reported: {}",
+        combined(&out)
+    );
+    assert!(
+        !s.exists(&format!("jobs/ready/state/heal/{}/attempt-1", s.today())),
+        "no attempt dir"
+    );
+}
+
+#[test]
+fn heal_without_a_block_is_a_noop() {
+    let s = Sandbox::new("ar-heal-clean");
+    ready_job(&s, false);
+    let out = s.run(&["heal", "ready"]);
+    assert_eq!(code(&out), 0, "clean heal exits 0");
+    assert!(combined(&out).contains("not blocked"));
+}
+
+#[test]
+fn auto_repair_propose_stops_with_a_proposal() {
+    let s = Sandbox::new("ar-auto-propose");
+    ready_job(&s, true);
+    propose_policy(&s);
+    let proposal = fake_proposal(
+        &s,
+        r#"{"fixable":true,"summary":"ok","edits":[{"path":"out/ready","content":"ok"}]}"#,
+    );
+
+    let out = s.run_env(
+        &["run", "ready", "--auto-repair"],
+        &[("U_RUNNER", "fake"), ("FAKE_AGENT_PROPOSAL", &proposal)],
+    );
+    assert_eq!(code(&out), 2, "propose in the loop exits 2");
+    assert!(
+        s.is_file(&format!(
+            "jobs/ready/state/heal/{}/attempt-1/proposal.json",
+            s.today()
+        )),
+        "loop stores the proposal"
+    );
+    assert!(!s.is_file("jobs/ready/out/ready"), "loop applies nothing");
+}
