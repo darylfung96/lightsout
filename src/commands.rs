@@ -817,11 +817,27 @@ fn agent_attempt(
     let outcome = heal::call_agent(paths, &attempt, &prompt_path, timeout);
     match outcome {
         heal::AgentOutcome::Proposal(value) => {
-            let fixable = value
-                .get("fixable")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            if !fixable {
+            let allow: Vec<std::path::PathBuf> = heal::allowed_prefixes(&paths.dir)
+                .into_iter()
+                .map(std::path::PathBuf::from)
+                .collect();
+            let edits = match heal::validate(&paths.dir, &allow, &value) {
+                Ok(edits) => edits,
+                Err(refusal) => {
+                    record_heal(
+                        paths,
+                        &attempt,
+                        action,
+                        &before,
+                        &before,
+                        &format!("invalid:{}", refusal.rule),
+                        2,
+                    );
+                    eprintln!("heal: proposal refused ({refusal})");
+                    return 2;
+                }
+            };
+            if edits.is_empty() {
                 record_heal(paths, &attempt, action, &before, &before, "unfixable", 0);
                 let summary = value
                     .get("summary")

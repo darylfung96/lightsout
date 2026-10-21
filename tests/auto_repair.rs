@@ -656,3 +656,97 @@ fn auto_repair_propose_stops_with_a_proposal() {
     );
     assert!(!s.is_file("jobs/ready/out/ready"), "loop applies nothing");
 }
+
+fn fresh_blocked_ready(s: &Sandbox) {
+    s.reset("ready");
+    let _ = std::fs::remove_dir_all(s.path("logs/heal"));
+    ready_job(s, true);
+    block_ready(s);
+}
+
+#[test]
+fn invalid_proposals_are_refused_without_changes() {
+    let s = Sandbox::new("ar-validate");
+    fresh_blocked_ready(&s);
+    propose_policy(&s);
+
+    let cases: &[(&str, &str)] = &[
+        (
+            "escape",
+            r#"{"fixable":true,"summary":"bad","edits":[{"path":"../escape","content":"x"}]}"#,
+        ),
+        (
+            "path",
+            r#"{"fixable":true,"summary":"bad","edits":[{"path":"/tmp/escape","content":"x"}]}"#,
+        ),
+        (
+            "protected",
+            r#"{"fixable":true,"summary":"bad","edits":[{"path":"job.sh","content":"x"}]}"#,
+        ),
+        (
+            "protected",
+            r#"{"fixable":true,"summary":"bad","edits":[{"path":"state/blocked","content":"x"}]}"#,
+        ),
+        (
+            "duplicate",
+            r#"{"fixable":true,"summary":"bad","edits":[{"path":"out/x","content":"a"},{"path":"out/x","content":"b"}]}"#,
+        ),
+        (
+            "schema",
+            r#"{"fixable":true,"summary":"bad","commands":["rm"],"edits":[{"path":"out/x","content":"a"}]}"#,
+        ),
+        (
+            "fixable-false-with-edits",
+            r#"{"fixable":false,"summary":"bad","edits":[{"path":"out/x","content":"a"}]}"#,
+        ),
+        (
+            "allow",
+            r#"{"fixable":true,"summary":"bad","edits":[{"path":"assets/x","content":"a"}]}"#,
+        ),
+    ];
+
+    for (rule, body) in cases {
+        fresh_blocked_ready(&s);
+        let proposal = fake_proposal(&s, body);
+        let out = run_heal(&s, &proposal);
+        assert_eq!(code(&out), 2, "{rule} exits 2: {}", combined(&out));
+        let history = s.read("jobs/ready/state/heal/history.tsv");
+        assert!(
+            history.contains(&format!("invalid:{rule}")),
+            "{rule} is recorded: {history}"
+        );
+        assert!(!s.exists("jobs/ready/out/x"), "{rule} writes nothing");
+        assert!(
+            s.is_file("jobs/ready/state/blocked"),
+            "{rule} keeps the block"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_allow_prefix_is_refused() {
+    let s = Sandbox::new("ar-validate-symlink");
+    fresh_blocked_ready(&s);
+    propose_policy(&s);
+    let outside = s.path("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::remove_dir_all(s.path("jobs/ready/out")).unwrap();
+    std::os::unix::fs::symlink(&outside, s.path("jobs/ready/out")).unwrap();
+
+    let proposal = fake_proposal(
+        &s,
+        r#"{"fixable":true,"summary":"bad","edits":[{"path":"out/x","content":"a"}]}"#,
+    );
+    let out = run_heal(&s, &proposal);
+    assert_eq!(code(&out), 2, "symlink exits 2");
+    let history = s.read("jobs/ready/state/heal/history.tsv");
+    assert!(
+        history.contains("invalid:symlink"),
+        "symlink is recorded: {history}"
+    );
+    assert!(
+        !s.exists("outside/x"),
+        "nothing is written through the link"
+    );
+}

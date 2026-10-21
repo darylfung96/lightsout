@@ -381,6 +381,9 @@ pub fn call_agent(
 }
 
 fn read_proposal(path: &Path) -> Option<Value> {
+    if fs::metadata(path).ok()?.len() > 1024 * 1024 {
+        return None;
+    }
     let body = fs::read_to_string(path).ok()?;
     serde_json::from_str(&body).ok()
 }
@@ -563,6 +566,326 @@ fn redact_assignments(text: &str) -> (String, usize) {
     (out, count)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EditKind {
+    Content(String),
+    Delete,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Edit {
+    pub path: PathBuf,
+    pub kind: EditKind,
+}
+
+#[derive(Clone, Debug)]
+pub struct Refusal {
+    pub rule: &'static str,
+    pub message: String,
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.rule, self.message)
+    }
+}
+
+fn refusal(rule: &'static str, message: impl Into<String>) -> Refusal {
+    Refusal {
+        rule,
+        message: message.into(),
+    }
+}
+
+const EDIT_LIMIT: usize = 20;
+const CONTENT_LIMIT: usize = 2 * 1024 * 1024;
+const SUMMARY_LIMIT: usize = 2000;
+
+pub fn validate(job_dir: &Path, allow: &[PathBuf], proposal: &Value) -> Result<Vec<Edit>, Refusal> {
+    let object = proposal
+        .as_object()
+        .ok_or_else(|| refusal("schema", "the proposal must be a JSON object"))?;
+    for key in object.keys() {
+        if !matches!(key.as_str(), "fixable" | "summary" | "edits") {
+            return Err(refusal("schema", format!("unknown field '{key}'")));
+        }
+    }
+    let fixable = object
+        .get("fixable")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| refusal("schema", "fixable must be true or false"))?;
+    let summary = object
+        .get("summary")
+        .and_then(Value::as_str)
+        .ok_or_else(|| refusal("schema", "summary must be a string"))?;
+    if summary.trim().is_empty() || summary.chars().count() > SUMMARY_LIMIT {
+        return Err(refusal(
+            "summary",
+            format!("summary must be 1-{SUMMARY_LIMIT} characters"),
+        ));
+    }
+    let edits = object
+        .get("edits")
+        .and_then(Value::as_array)
+        .ok_or_else(|| refusal("schema", "edits must be an array"))?;
+    if edits.len() > EDIT_LIMIT {
+        return Err(refusal(
+            "edits",
+            format!("at most {EDIT_LIMIT} edits are allowed"),
+        ));
+    }
+    if !fixable {
+        if edits.is_empty() {
+            return Ok(Vec::new());
+        }
+        return Err(refusal(
+            "fixable-false-with-edits",
+            "fixable:false requires an empty edits list",
+        ));
+    }
+    if edits.is_empty() {
+        return Err(refusal(
+            "no-edits",
+            "fixable:true requires at least one edit",
+        ));
+    }
+
+    let prefixes = normalize_allow(allow);
+    let mut out = Vec::new();
+    let mut seen: Vec<PathBuf> = Vec::new();
+    let mut total = 0usize;
+    for (index, edit) in edits.iter().enumerate() {
+        let fields = edit
+            .as_object()
+            .ok_or_else(|| refusal("schema", format!("edit {} is not an object", index + 1)))?;
+        for key in fields.keys() {
+            if !matches!(key.as_str(), "path" | "content" | "delete") {
+                return Err(refusal(
+                    "schema",
+                    format!("edit {} has unknown field '{key}'", index + 1),
+                ));
+            }
+        }
+        let raw = fields
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| refusal("schema", format!("edit {} needs a path", index + 1)))?;
+        let path = normalize_path(raw)?;
+        if seen.iter().any(|seen| seen == &path) {
+            return Err(refusal(
+                "duplicate",
+                format!("edit {} repeats path '{}'", index + 1, path.display()),
+            ));
+        }
+        seen.push(path.clone());
+
+        if is_protected(&path) {
+            return Err(refusal(
+                "protected",
+                format!("path '{}' is reserved for the manager", path.display()),
+            ));
+        }
+        if !prefixes.iter().any(|prefix| path.starts_with(prefix)) {
+            return Err(refusal(
+                "allow",
+                format!(
+                    "path '{}' is outside the allowlist ({})",
+                    path.display(),
+                    prefixes
+                        .iter()
+                        .map(|prefix| prefix.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ));
+        }
+        let full = job_dir.join(&path);
+        check_components(job_dir, &path)?;
+
+        let has_content = fields.contains_key("content");
+        let has_delete = fields.contains_key("delete");
+        if has_content == has_delete {
+            return Err(refusal(
+                "schema",
+                format!(
+                    "edit {} must have exactly one of content or delete",
+                    index + 1
+                ),
+            ));
+        }
+        if has_delete {
+            match fields.get("delete").and_then(Value::as_bool) {
+                Some(true) => {}
+                _ => {
+                    return Err(refusal(
+                        "schema",
+                        format!("edit {} has delete:false; omit it or use true", index + 1),
+                    ));
+                }
+            }
+            if !full.is_file() {
+                return Err(refusal(
+                    "delete-target",
+                    format!("delete target '{}' is not a regular file", path.display()),
+                ));
+            }
+            out.push(Edit {
+                path,
+                kind: EditKind::Delete,
+            });
+            continue;
+        }
+
+        let content = fields
+            .get("content")
+            .and_then(Value::as_str)
+            .ok_or_else(|| refusal("schema", format!("edit {} content must be text", index + 1)))?;
+        total = total.saturating_add(content.len());
+        if total > CONTENT_LIMIT {
+            return Err(refusal(
+                "size",
+                format!("total content exceeds {CONTENT_LIMIT} bytes"),
+            ));
+        }
+        let parent = full
+            .parent()
+            .ok_or_else(|| refusal("parent", format!("'{}' has no parent", path.display())))?;
+        if !parent.is_dir() {
+            return Err(refusal(
+                "parent",
+                format!(
+                    "parent '{}' is missing or not a directory",
+                    parent.display()
+                ),
+            ));
+        }
+        if full.exists() && !full.is_file() {
+            return Err(refusal(
+                "target",
+                format!("'{}' is not a regular file", path.display()),
+            ));
+        }
+        out.push(Edit {
+            path,
+            kind: EditKind::Content(content.to_string()),
+        });
+    }
+    Ok(out)
+}
+
+fn normalize_allow(allow: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for prefix in allow {
+        if let Ok(path) = normalize_path(&prefix.to_string_lossy()) {
+            if !path.as_os_str().is_empty() {
+                out.push(path);
+            }
+        }
+    }
+    if out.is_empty() {
+        out.push(PathBuf::from("out"));
+    }
+    out
+}
+
+fn normalize_path(raw: &str) -> Result<PathBuf, Refusal> {
+    if raw.is_empty() {
+        return Err(refusal("path", "path is empty"));
+    }
+    if raw.contains('\\') || raw.contains('\0') {
+        return Err(refusal("path", "path must not contain a backslash or NUL"));
+    }
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        return Err(refusal("path", "path must be relative"));
+    }
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(name) => out.push(name),
+            std::path::Component::CurDir => {}
+            _ => {
+                return Err(refusal(
+                    "escape",
+                    format!("path '{raw}' must not leave the job directory"),
+                ));
+            }
+        }
+    }
+    if out.as_os_str().is_empty() {
+        return Err(refusal("path", "path has no file name"));
+    }
+    Ok(out)
+}
+
+fn is_protected(path: &Path) -> bool {
+    let components: Vec<&str> = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect();
+    if components.is_empty() {
+        return true;
+    }
+    if components.contains(&".git") {
+        return true;
+    }
+    if components[0].starts_with('.') {
+        return true;
+    }
+    if matches!(components[0], "state" | "logs" | "lib" | "spec") {
+        return true;
+    }
+    if components.len() == 1 && matches!(components[0], "job.sh" | "spec.md" | "repair.allow") {
+        return true;
+    }
+    false
+}
+
+fn check_components(job_dir: &Path, path: &Path) -> Result<(), Refusal> {
+    let mut current = job_dir.to_path_buf();
+    let mut parts: Vec<&std::ffi::OsStr> = path
+        .components()
+        .map(|component| component.as_os_str())
+        .collect();
+    let last = parts.pop();
+    for part in parts {
+        current.push(part);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(refusal(
+                    "symlink",
+                    format!("'{}' is a symlink", current.display()),
+                ));
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(refusal(
+                    "parent",
+                    format!("'{}' is not a directory", current.display()),
+                ));
+            }
+            Ok(_) => {}
+            Err(_) => {
+                return Err(refusal(
+                    "parent",
+                    format!("'{}' is missing", current.display()),
+                ));
+            }
+        }
+    }
+    if let Some(last) = last {
+        current.push(last);
+        if let Ok(metadata) = fs::symlink_metadata(&current) {
+            if metadata.file_type().is_symlink() {
+                return Err(refusal(
+                    "symlink",
+                    format!("'{}' is a symlink", current.display()),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -601,6 +924,125 @@ mod tests {
         fs::create_dir_all(&lock).unwrap();
         fs::write(lock.join("expiry"), "0\n").unwrap();
         assert!(matches!(Lock::acquire(&state), LockResult::Acquired(_)));
+    }
+
+    fn job_dir(label: &str) -> PathBuf {
+        let root = temp(label);
+        fs::create_dir_all(root.join("out")).unwrap();
+        root
+    }
+
+    fn value(body: &str) -> Value {
+        serde_json::from_str(body).unwrap()
+    }
+
+    fn allow_out() -> Vec<PathBuf> {
+        vec![PathBuf::from("out")]
+    }
+
+    #[test]
+    fn validate_accepts_a_safe_edit() {
+        let dir = job_dir("validate-ok");
+        let edits = validate(
+            &dir,
+            &allow_out(),
+            &value(r#"{"fixable":true,"summary":"ok","edits":[{"path":"out/new.txt","content":"hello"}]}"#),
+        )
+        .expect("safe edit");
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].path, PathBuf::from("out/new.txt"));
+    }
+
+    #[test]
+    fn validate_rejects_too_many_edits() {
+        let dir = job_dir("validate-many");
+        let mut edits = Vec::new();
+        for i in 0..21 {
+            edits.push(format!("{{\"path\":\"out/{i}.txt\",\"content\":\"x\"}}"));
+        }
+        let body = format!(
+            "{{\"fixable\":true,\"summary\":\"many\",\"edits\":[{}]}}",
+            edits.join(",")
+        );
+        let refused = validate(&dir, &allow_out(), &value(&body)).expect_err("21 edits");
+        assert_eq!(refused.rule, "edits");
+    }
+
+    #[test]
+    fn validate_rejects_oversized_content() {
+        let dir = job_dir("validate-size");
+        let content = "x".repeat(2 * 1024 * 1024 + 1);
+        let body = value(&format!(
+            "{{\"fixable\":true,\"summary\":\"big\",\"edits\":[{{\"path\":\"out/big.txt\",\"content\":\"{content}\"}}]}}"
+        ));
+        let refused = validate(&dir, &allow_out(), &body).expect_err("too big");
+        assert_eq!(refused.rule, "size");
+    }
+
+    #[test]
+    fn validate_rejects_an_unknown_field() {
+        let dir = job_dir("validate-schema");
+        let refused = validate(
+            &dir,
+            &allow_out(),
+            &value(r#"{"fixable":true,"summary":"ok","commands":[],"edits":[{"path":"out/x","content":"x"}]}"#),
+        )
+        .expect_err("unknown field");
+        assert_eq!(refused.rule, "schema");
+    }
+
+    #[test]
+    fn validate_rejects_fixable_false_with_edits() {
+        let dir = job_dir("validate-false");
+        let refused = validate(
+            &dir,
+            &allow_out(),
+            &value(r#"{"fixable":false,"summary":"no","edits":[{"path":"out/x","content":"x"}]}"#),
+        )
+        .expect_err("false with edits");
+        assert_eq!(refused.rule, "fixable-false-with-edits");
+    }
+
+    #[test]
+    fn validate_rejects_a_protected_path() {
+        let dir = job_dir("validate-protected");
+        let refused = validate(
+            &dir,
+            &[PathBuf::from("job.sh")],
+            &value(r#"{"fixable":true,"summary":"bad","edits":[{"path":"job.sh","content":"x"}]}"#),
+        )
+        .expect_err("protected");
+        assert_eq!(refused.rule, "protected");
+    }
+
+    #[test]
+    fn validate_rejects_a_delete_of_a_missing_file() {
+        let dir = job_dir("validate-delete");
+        let refused = validate(
+            &dir,
+            &allow_out(),
+            &value(r#"{"fixable":true,"summary":"bad","edits":[{"path":"out/missing.bin","delete":true}]}"#),
+        )
+        .expect_err("missing delete");
+        assert_eq!(refused.rule, "delete-target");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_rejects_a_symlinked_component() {
+        let dir = job_dir("validate-symlink");
+        let outside = dir.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("out/link")).unwrap();
+        let refused = validate(
+            &dir,
+            &[PathBuf::from("out")],
+            &value(
+                r#"{"fixable":true,"summary":"bad","edits":[{"path":"out/link/x","content":"x"}]}"#,
+            ),
+        )
+        .expect_err("symlink");
+        assert_eq!(refused.rule, "symlink");
     }
 
     #[test]
