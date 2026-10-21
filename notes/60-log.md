@@ -118,4 +118,5 @@ and refuses a contradiction, and for `claude`/`codex` it passes the model flag.
 and the repair use the same OpenCode Zen model.
 
 Verified 2026-10-21: `tests/agent_profile.rs` passes 7 tests, and the existing
-auto-repair, workspace and 261-check suites pass.
+auto-repair, workspace and 261-check suites pass. Committed as `48a15de` on
+`main`; CI run `39645810534` succeeded.
