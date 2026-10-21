@@ -32,10 +32,18 @@ u_heal_agent() {
         fi
         ;;
       claude)
-        exec claude -p "$(cat "$prompt")"
+        if [ -n "${U_AGENT_MODEL:-}" ]; then
+          exec claude -p --model "$U_AGENT_MODEL" "$(cat "$prompt")"
+        else
+          exec claude -p "$(cat "$prompt")"
+        fi
         ;;
       codex)
-        exec codex exec "$(cat "$prompt")"
+        if [ -n "${U_AGENT_MODEL:-}" ]; then
+          exec codex exec --model "$U_AGENT_MODEL" "$(cat "$prompt")"
+        else
+          exec codex exec "$(cat "$prompt")"
+        fi
         ;;
       *)
         echo "heal: unknown runner '$runner' (use dsh, claude, codex or fake)" >&2

@@ -64,7 +64,7 @@ u_agent() {
       ;;
     dsh)
       command -v dsh >/dev/null 2>&1 || u_die "u_agent: runner dsh is not installed"
-      u_say "agent: runner dsh (headless) on $prompt"
+      u_say "agent: runner dsh (headless) on $prompt${U_AGENT_PROFILE:+ [$U_AGENT_PROFILE]}"
       if [ -n "${U_AGENT_PATCH:-}" ]; then
         dsh --profile headless --patch "$U_AGENT_PATCH" < "$prompt" || rc=$?
       else
@@ -74,14 +74,22 @@ u_agent() {
     claude)
       command -v claude >/dev/null 2>&1 || u_die "u_agent: runner claude is not installed"
       text=$(cat "$prompt")
-      u_say "agent: runner claude (-p) on $prompt"
-      claude -p "$text" || rc=$?
+      u_say "agent: runner claude (-p) on $prompt${U_AGENT_MODEL:+ [model $U_AGENT_MODEL]}"
+      if [ -n "${U_AGENT_MODEL:-}" ]; then
+        claude -p --model "$U_AGENT_MODEL" "$text" || rc=$?
+      else
+        claude -p "$text" || rc=$?
+      fi
       ;;
     codex)
       command -v codex >/dev/null 2>&1 || u_die "u_agent: runner codex is not installed"
       text=$(cat "$prompt")
-      u_say "agent: runner codex (exec) on $prompt"
-      codex exec "$text" || rc=$?
+      u_say "agent: runner codex (exec) on $prompt${U_AGENT_MODEL:+ [model $U_AGENT_MODEL]}"
+      if [ -n "${U_AGENT_MODEL:-}" ]; then
+        codex exec --model "$U_AGENT_MODEL" "$text" || rc=$?
+      else
+        codex exec "$text" || rc=$?
+      fi
       ;;
     *)
       u_die "u_agent: unknown runner '$runner' (use dsh, claude, codex or fake)"

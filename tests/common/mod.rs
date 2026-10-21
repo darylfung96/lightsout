@@ -77,6 +77,12 @@ impl Sandbox {
             &source.join("jobs/everyday-laws/spec.md"),
             &root.join("jobs/everyday-laws/spec.md"),
         );
+        for rel in ["jobs/everyday-laws/agent.conf", "agents.conf"] {
+            let from = source.join(rel);
+            if from.is_file() {
+                copy_file(&from, &root.join(rel));
+            }
+        }
         fs::create_dir_all(root.join("jobs/noop")).unwrap();
         fs::create_dir_all(root.join("jobs/everyday-laws")).unwrap();
 

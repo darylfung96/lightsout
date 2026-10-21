@@ -60,3 +60,19 @@ per-job and per-workspace caps bound the bill. The owner chose `agent:apply` as
 the default; `agent:propose` remains for a source that needs approval. The gate
 still decides, because the proposal is input and no agent can mark a gate
 passed.
+
+## D8 — Agent model choice is a per-job profile
+
+A job's agent runner and model live in `jobs/<name>/agent.conf`, because the
+lesson writer and the repair that follows it must use the same pin; a model
+chosen at runtime would make a passing pipeline a different pipeline next week.
+`agents.conf` holds named profiles for sharing, and a job selects one with
+`profile = <name>`. For `dsh` the profile points at the patch that pins
+provider, model and effort, since `dsh` has no `--model` flag; the manager reads
+the patch and refuses a profile that contradicts it. Because `claude` and `codex`
+accept `--model`, their adapter passes the profile's `model` as that argument.
+Environment variables still override the file for one invocation, so an
+operator can test a different runner without editing the job. The resolved
+profile appears in `plan`, `triage`, `doctor` and the heal history, because the
+pin has to be visible after the call. The manager never writes the profile,
+because a learned model rule would hide which model ran.

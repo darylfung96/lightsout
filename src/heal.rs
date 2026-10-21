@@ -12,6 +12,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
+use crate::agent;
 use crate::clock;
 use crate::repo::Paths;
 use crate::state;
@@ -110,6 +111,9 @@ pub struct Attempt {
     pub number: usize,
     pub dir: PathBuf,
     pub started: i64,
+    /// The resolved profile, once the caller knows it. `record_attempt` copies
+    /// it into `meta.env` and the history's agent column.
+    pub agent: Option<String>,
 }
 
 pub fn begin_attempt(paths: &Paths) -> Result<Attempt, String> {
@@ -124,6 +128,7 @@ pub fn begin_attempt(paths: &Paths) -> Result<Attempt, String> {
                     number,
                     dir,
                     started: clock::now_epoch(),
+                    agent: None,
                 });
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -145,6 +150,7 @@ pub struct Record<'a> {
     pub verdict: &'a str,
     pub rc: i32,
     pub cost: Option<&'a str>,
+    pub agent: Option<&'a str>,
 }
 
 pub fn record_attempt(paths: &Paths, attempt: &Attempt, record: &Record) {
@@ -153,6 +159,7 @@ pub fn record_attempt(paths: &Paths, attempt: &Attempt, record: &Record) {
     let after = state::one_line(record.after_key);
     let verdict = state::one_line(record.verdict);
     let cost = record.cost.unwrap_or("");
+    let agent = record.agent.map(state::one_line).unwrap_or_default();
 
     let _ = fs::write(attempt.dir.join("before"), format!("{before}\n"));
     let _ = fs::write(attempt.dir.join("after"), format!("{after}\n"));
@@ -160,14 +167,14 @@ pub fn record_attempt(paths: &Paths, attempt: &Attempt, record: &Record) {
     let _ = fs::write(
         attempt.dir.join("meta.env"),
         format!(
-            "action={action}\nbefore={before}\nafter={after}\nverdict={verdict}\nrc={}\ncost={cost}\n",
+            "action={action}\nbefore={before}\nafter={after}\nverdict={verdict}\nrc={}\ncost={cost}\nagent={agent}\n",
             record.rc
         ),
     );
 
     let seconds = (clock::now_epoch() - attempt.started).max(0);
     let line = format!(
-        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
         clock::iso(attempt.started),
         paths.name,
         attempt.number,
@@ -177,7 +184,8 @@ pub fn record_attempt(paths: &Paths, attempt: &Attempt, record: &Record) {
         verdict,
         record.rc,
         seconds,
-        cost
+        cost,
+        agent
     );
     let _ = state::append(&paths.state.join("heal").join("history.tsv"), &line);
 }
@@ -313,6 +321,7 @@ pub fn call_agent(
     attempt: &Attempt,
     prompt_path: &Path,
     timeout: u64,
+    profile: &agent::Resolved,
 ) -> AgentOutcome {
     let proposal_path = attempt.dir.join("proposal.json");
     let log_path = attempt.dir.join("runner.log");
@@ -340,9 +349,24 @@ pub fn call_agent(
         .env("UNIT", &paths.unit)
         .env("DRY", "0")
         .env("U_AGENT_TIMEOUT", timeout.to_string())
+        .env("U_RUNNER", &profile.runner)
+        .env("U_HEAL_RUNNER", &profile.runner)
+        .env("U_AGENT_PROFILE", profile.describe())
         .env("LIGHTSOUT_HEAL_OUT", &proposal_path)
         .env("LIGHTSOUT_HEAL_TIMEOUT", &timeout_path)
         .stdout(Stdio::from(log));
+    match &profile.model {
+        Some(model) => cmd.env("U_AGENT_MODEL", model),
+        None => cmd.env_remove("U_AGENT_MODEL"),
+    };
+    match &profile.patch {
+        Some(patch) => cmd.env("U_AGENT_PATCH", patch),
+        None => cmd.env_remove("U_AGENT_PATCH"),
+    };
+    match &profile.effort {
+        Some(effort) => cmd.env("U_AGENT_EFFORT", effort),
+        None => cmd.env_remove("U_AGENT_EFFORT"),
+    };
     if let Some(stderr) = stderr {
         cmd.stderr(Stdio::from(stderr));
     }

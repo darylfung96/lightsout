@@ -8,6 +8,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::agent;
 use crate::repo;
 use crate::state;
 
@@ -72,6 +73,18 @@ const TRIAGE_CONF: &str = "\
 # Precedence: exact, then (job, *), then (*, source), then (*, *).
 * * human
 ";
+const AGENTS_CONF: &str = "\
+# Named agent profiles. A job opts in with jobs/<name>/agent.conf:
+#   profile = default
+#
+# A profile names the runner and, for dsh, the patch that pins provider, model
+# and effort. The manager records the resolved profile in plan, triage, doctor
+# and the heal history. A missing job profile uses the runner's own default.
+#
+# [default]
+# runner = dsh
+# patch = ~/programming/video-automation/automation/headless.patch.yml
+";
 const NOOP_JOB: &str = include_str!("../jobs/noop/job.sh");
 const SCHEMA: &str = include_str!("../spec/SCHEMA.md");
 const DIGEST_SPEC: &str = include_str!("../spec/examples/digest.md");
@@ -107,6 +120,7 @@ fn templates() -> Vec<TemplateFile> {
         file("bin/job", JOB_LAUNCHER, 0o755),
         file("bin/report", REPORT_LAUNCHER, 0o755),
         file("triage.conf", TRIAGE_CONF, 0o644),
+        file("agents.conf", AGENTS_CONF, 0o644),
         TemplateFile {
             rel: ".gitignore",
             body: GITIGNORE.to_string(),
@@ -408,6 +422,20 @@ pub fn doctor(root: &Path) -> i32 {
         );
     }
 
+    if root.join(agent::PROFILES).is_file() {
+        match agent::workspace_profiles(root) {
+            Ok(names) => ok(&format!(
+                "agents.conf ({} named profile{})",
+                names.len(),
+                if names.len() == 1 { "" } else { "s" }
+            )),
+            Err(error) if error.is_unavailable() => {
+                warning(&mut warnings, &format!("agents.conf: {error}"))
+            }
+            Err(error) => fail(&mut errors, &format!("agents.conf: {error}")),
+        }
+    }
+
     let jobs_dir = root.join("jobs");
     let mut job_bodies: Vec<(String, String)> = Vec::new();
     if !jobs_dir.is_dir() {
@@ -434,6 +462,7 @@ pub fn doctor(root: &Path) -> i32 {
             if job.is_file() {
                 ok(&format!("jobs/{name}/job.sh"));
                 check_repair_allow(root, &name, &mut errors);
+                check_agent_profile(root, &name, &mut errors, &mut warnings);
                 job_bodies.push((name, state::read_lossy(&job)));
             } else {
                 warning(&mut warnings, &format!("jobs/{name}/ has no job.sh"));
@@ -500,6 +529,58 @@ pub fn doctor(root: &Path) -> i32 {
     }
 
     finish(errors, warnings)
+}
+
+fn check_agent_profile(root: &Path, job: &str, errors: &mut usize, warnings: &mut usize) {
+    let path = root.join("jobs").join(job).join(agent::JOB_PROFILE);
+    if !path.is_file() {
+        return;
+    }
+    match agent::resolve_config(root, job) {
+        Ok(profile) => {
+            ok(&format!(
+                "agent profile jobs/{job}/{}: {}",
+                agent::JOB_PROFILE,
+                profile.describe()
+            ));
+            if profile.runner == "fake" {
+                if root.join("tests/fake-agent.sh").is_file() {
+                    ok("agent runner fake (repository test double)");
+                } else {
+                    warning(
+                        warnings,
+                        "agent runner fake is configured but tests/fake-agent.sh is missing",
+                    );
+                }
+            } else if which(&profile.runner).is_none() {
+                warning(
+                    warnings,
+                    &format!(
+                        "agent runner '{}' is not installed; heal and auto-repair will fail",
+                        profile.runner
+                    ),
+                );
+            } else {
+                ok(&format!("agent runner {}", profile.runner));
+            }
+            if profile.runner == "dsh" && profile.patch.is_none() {
+                warning(
+                    warnings,
+                    "agent profile has no dsh patch; the runner's default profile and model are used",
+                );
+            }
+            if profile.model.is_none() && profile.runner != "fake" {
+                warning(
+                    warnings,
+                    "agent profile pins no model; the runner's ambient default is used",
+                );
+            }
+        }
+        Err(error) if error.is_unavailable() => {
+            warning(warnings, &format!("agent profile: {error}"));
+        }
+        Err(error) => fail(errors, &format!("agent profile: {error}")),
+    }
 }
 
 fn finish(errors: usize, warnings: usize) -> i32 {

@@ -12,6 +12,7 @@ use std::process::Command;
 
 use serde_json::Value;
 
+use crate::agent;
 use crate::clock;
 use crate::heal;
 use crate::repo::Paths;
@@ -103,6 +104,7 @@ fn apply_job_env(
     class: Option<&str>,
     source: Option<&str>,
     retrying: bool,
+    agent: Option<&agent::Resolved>,
 ) {
     cmd.env("REPO", &paths.repo);
     cmd.env("LIGHTSOUT_REPO", &paths.repo);
@@ -132,6 +134,22 @@ fn apply_job_env(
     if retrying {
         cmd.env("U_RETRYING", "1");
     }
+    if let Some(profile) = agent {
+        cmd.env("U_RUNNER", &profile.runner);
+        cmd.env("U_AGENT_PROFILE", profile.describe());
+        match &profile.model {
+            Some(model) => cmd.env("U_AGENT_MODEL", model),
+            None => cmd.env_remove("U_AGENT_MODEL"),
+        };
+        match &profile.patch {
+            Some(patch) => cmd.env("U_AGENT_PATCH", patch),
+            None => cmd.env_remove("U_AGENT_PATCH"),
+        };
+        match &profile.effort {
+            Some(effort) => cmd.env("U_AGENT_EFFORT", effort),
+            None => cmd.env_remove("U_AGENT_EFFORT"),
+        };
+    }
 }
 
 fn child_rc(status: std::process::ExitStatus) -> i32 {
@@ -157,6 +175,43 @@ fn run_job(
     source: Option<&str>,
     retrying: bool,
 ) -> i32 {
+    let profile = match agent::resolve(repo, name, false) {
+        Ok(profile) => profile,
+        Err(error) => {
+            eprintln!("agent profile: {error}");
+            return 64;
+        }
+    };
+    run_job_with(
+        repo,
+        name,
+        verb,
+        RunOptions {
+            dry,
+            class,
+            source,
+            retrying,
+            agent: Some(&profile),
+        },
+    )
+}
+
+struct RunOptions<'a> {
+    dry: bool,
+    class: Option<&'a str>,
+    source: Option<&'a str>,
+    retrying: bool,
+    agent: Option<&'a agent::Resolved>,
+}
+
+fn run_job_with(repo: &Path, name: &str, verb: &str, options: RunOptions<'_>) -> i32 {
+    let RunOptions {
+        dry,
+        class,
+        source,
+        retrying,
+        agent,
+    } = options;
     if !repo.join("jobs").join(name).join("job.sh").is_file() {
         eprintln!("no such job: {name}");
         return 64;
@@ -188,7 +243,7 @@ fn run_job(
 
     let mut cmd = Command::new("bash");
     cmd.arg(paths.dir.join("job.sh"));
-    apply_job_env(&mut cmd, &paths, dry, class, source, retrying);
+    apply_job_env(&mut cmd, &paths, dry, class, source, retrying, agent);
     let rc = match cmd.status() {
         Ok(status) => child_rc(status),
         Err(error) => {
@@ -242,7 +297,44 @@ fn record(paths: &Paths, verb: &str, rc: i32) -> std::io::Result<()> {
 }
 
 pub fn plan(repo: &Path, name: &str) -> i32 {
-    run_job(repo, name, "plan", true, None, None, false)
+    match agent::resolve(repo, name, false) {
+        Ok(profile) => {
+            if profile.configured {
+                println!("agent: {}", profile.describe());
+            }
+            run_job_with(
+                repo,
+                name,
+                "plan",
+                RunOptions {
+                    dry: true,
+                    class: None,
+                    source: None,
+                    retrying: false,
+                    agent: Some(&profile),
+                },
+            )
+        }
+        Err(error) if error.is_unavailable() => {
+            println!("warn: agent profile: {error}");
+            run_job_with(
+                repo,
+                name,
+                "plan",
+                RunOptions {
+                    dry: true,
+                    class: None,
+                    source: None,
+                    retrying: false,
+                    agent: None,
+                },
+            )
+        }
+        Err(error) => {
+            eprintln!("agent profile: {error}");
+            64
+        }
+    }
 }
 
 pub fn run(
@@ -433,6 +525,10 @@ pub fn retry(repo: &Path, argv: &[String]) -> i32 {
     let paths = retry_env(repo, name);
     if !paths.has_job() {
         eprintln!("no such job: {name}");
+        return 64;
+    }
+    if let Err(error) = agent::resolve(repo, name, false) {
+        eprintln!("agent profile: {error}");
         return 64;
     }
     let blocked_path = paths.state.join("blocked");
@@ -664,6 +760,7 @@ fn heal_loop(
                             verdict: "refused",
                             rc: code,
                             cost: None,
+                            agent: None,
                         },
                     );
                     return code;
@@ -692,6 +789,7 @@ fn heal_loop(
                         verdict,
                         rc,
                         cost: None,
+                        agent: None,
                     },
                 );
                 if rc != 2 {
@@ -759,6 +857,7 @@ fn record_heal(
             verdict,
             rc,
             cost: None,
+            agent: attempt.agent.as_deref(),
         },
     );
 }
@@ -771,6 +870,14 @@ fn agent_attempt(
     lock: &heal::Lock,
     apply: bool,
 ) -> i32 {
+    let profile = match agent::resolve(repo, &paths.name, true) {
+        Ok(profile) => profile,
+        Err(error) => {
+            eprintln!("agent profile: {error}");
+            return 64;
+        }
+    };
+    let agent_label = profile.describe();
     let used = triage::heal_count(&paths.state);
     let max = triage::max_heals();
     if used >= max {
@@ -784,14 +891,16 @@ fn agent_attempt(
         eprintln!("heal: {error}");
         return 2;
     }
-    let attempt = match heal::begin_attempt(paths) {
+    let mut attempt = match heal::begin_attempt(paths) {
         Ok(attempt) => attempt,
         Err(error) => {
             eprintln!("heal: {error}");
             return 2;
         }
     };
+    attempt.agent = Some(agent_label.clone());
     lock.refresh();
+    println!("heal: agent {agent_label}");
     let before = triage::failure_key(blocked);
     let timeout = match heal::timeout_seconds() {
         Ok(value) => value,
@@ -832,7 +941,7 @@ fn agent_attempt(
     }
 
     let before_files = heal::fingerprint(repo, paths);
-    let outcome = heal::call_agent(paths, &attempt, &prompt_path, timeout);
+    let outcome = heal::call_agent(paths, &attempt, &prompt_path, timeout, &profile);
     let after_files = heal::fingerprint(repo, paths);
     if let Some(path) = heal::first_change(&before_files, &after_files) {
         record_heal(paths, &attempt, action, &before, &before, "violation", 2);
@@ -977,6 +1086,14 @@ fn heal_apply(repo: &Path, name: &str) -> i32 {
         eprintln!("no such job: {name}");
         return 64;
     }
+    let profile = match agent::resolve(repo, name, false) {
+        Ok(profile) => profile,
+        Err(error) => {
+            eprintln!("agent profile: {error}");
+            return 64;
+        }
+    };
+    let agent_label = profile.describe();
     let paths = job_env(repo, name);
     let Some(blocked) = state::blocked_marker(&paths.state.join("blocked")) else {
         println!("{name} is not blocked; nothing to apply");
@@ -1000,6 +1117,15 @@ fn heal_apply(repo: &Path, name: &str) -> i32 {
         println!("heal: no stored proposal for {name} today");
         return 2;
     };
+    // The proposal may have been written under an earlier profile; record the
+    // agent that produced it, not whatever the job resolves to today.
+    let proposal_agent = state::read_lossy(&attempt_dir.join("meta.env"))
+        .lines()
+        .find_map(|line| line.strip_prefix("agent="))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| agent_label.clone());
     let body = fs::read_to_string(attempt_dir.join("proposal.json")).unwrap_or_default();
     let proposal: Value = match serde_json::from_str(&body) {
         Ok(value) => value,
@@ -1053,6 +1179,7 @@ fn heal_apply(repo: &Path, name: &str) -> i32 {
             number,
             dir: attempt_dir.clone(),
             started: clock::now_epoch(),
+            agent: Some(proposal_agent.clone()),
         },
         "apply",
         &before,

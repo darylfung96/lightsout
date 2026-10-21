@@ -103,6 +103,7 @@ fn init_creates_a_runnable_workspace() {
     assert!(office.join("lib/heal.sh").is_file());
     assert!(office.join("lib/prompts/repair.md").is_file());
     assert!(office.join("triage.conf").is_file());
+    assert!(office.join("agents.conf").is_file());
     assert!(office.join("jobs/noop/job.sh").is_file());
     assert!(office.join("bin/scaffold").is_file());
 

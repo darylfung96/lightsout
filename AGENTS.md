@@ -17,6 +17,11 @@ letting any job write notes.
 - **Scripts before agents.** Anything checkable becomes a gate, not a sentence
   in a prompt. See `~/agent-memory/shared/deterministic-first.md`.
 - **An agent step is staged, gated, and never retried.** See `docs/agent-step.md`.
+- **The agent model is a profile, not a runtime guess.** `jobs/<name>/agent.conf`
+  pins the runner and model, `agents.conf` holds named profiles, and both the
+  lesson call and the repair call resolve the same file. The manager validates a
+  `dsh` model against its patch instead of passing a flag the runner does not
+  accept. See `docs/agent-step.md`.
 - **Auto-repair edits artifacts, never the checklist.** An agent proposal is
   data: the validator refuses `job.sh`, `spec.md`, `state/` and `lib/`, the
   manager applies edits atomically with a backup, and only the job's gate may

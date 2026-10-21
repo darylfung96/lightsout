@@ -71,6 +71,26 @@ running `triage` and one `heal` by hand on `everyday-laws`, because a proposal
 and a gate have not been seen together until they run on the real job; only
 then add `--auto-repair` to launchd.
 
+## Agent profiles
+
+Agent profiles are implemented as of 2026-10-21. A job pins its runner and
+model in `jobs/<name>/agent.conf`; `agents.conf` holds named profiles, and the
+manager resolves the file once for the lesson call and once for the repair call.
+A `dsh` profile points at the patch that pins provider, model and effort, and
+the manager reads the patch's `agent-default-model` block to fill or check the
+profile; `claude` and `codex` receive `--model`. The resolved profile is printed
+by `plan`, carried by `triage` text and JSON, checked by `doctor`, and written
+as the last column of `state/heal/history.tsv`. `jobs/everyday-laws/agent.conf`
+now points at the video workspace's `headless.patch.yml`, so a repair no longer
+falls back to the bare headless profile.
+
+Verified 2026-10-21: `cargo test` passes 103 tests (27 unit, 7 agent-profile,
+36 auto-repair, 1 manifest, 12 + 11 contract groups, 9 workspace), `tests/run.sh`
+passes 261 checks, and `tests/install.sh` passes 11 checks. Because each path
+has its own failure mode, the profile tests exercise named selection, dsh patch
+validation, a model mismatch, the repair path, the missing-patch warning/refusal
+and an unknown key.
+
 ## Port shape
 
 - `bin/job` and `bin/report` are launchers that find the built binary;

@@ -84,10 +84,9 @@ cannot spend the next attempt.
 The owner chose `agent:apply` as the default, so `agent:propose` is the
 approval opt-in.
 
-Verified 2026-10-21: `cargo test` passes with 36 auto-repair tests, the 261
-ported checks, the workspace tests and the shell suite; `tests/install.sh` and
-`cargo clippy` are clean. Still open: Task 7 documentation, Task 8's 0.2.0
-release, and the first supervised `heal` on `everyday-laws`.
+The feature landed with its tests green; the documentation pass, the 0.2.0
+release and the first supervised `heal` on `everyday-laws` remained open at
+that point.
 
 
 ## [2026-10-21] decision | v0.2.0 publishes bounded auto-repair
@@ -105,3 +104,18 @@ The release also carries the migration from `~/pi-memory` to
 `~/agent-memory`, because the store moved while the feature was in flight. Keep
 the first real `heal` on `everyday-laws` supervised, because the release was
 exercised with the fake runner and the installer, not with a live video build.
+
+## [2026-10-21] decision | agent profiles pin one runner for a job and its repair
+
+Added `jobs/<name>/agent.conf` and workspace `agents.conf`, because the video
+job's lesson call used the video patch while `lightsout heal` ran a separate
+manager process with no patch. The resolver normalises runner, model, provider,
+patch and effort; for `dsh` it reads the patch's `agent-default-model` block
+and refuses a contradiction, and for `claude`/`codex` it passes the model flag.
+`plan`, `triage`, `doctor` and the heal history now name the resolved profile.
+`jobs/everyday-laws/agent.conf` points at
+`~/programming/video-automation/automation/headless.patch.yml`, so the lesson
+and the repair use the same OpenCode Zen model.
+
+Verified 2026-10-21: `tests/agent_profile.rs` passes 7 tests, and the existing
+auto-repair, workspace and 261-check suites pass.

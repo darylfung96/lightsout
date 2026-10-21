@@ -1,6 +1,6 @@
 [package]
 name = "lightsout"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.82"
 description = "LightsOut manager — the run contract, guards, gates and dashboard for unattended jobs"
@@ -20,6 +20,7 @@ include = [
     "lib/*.sh",
     "lib/prompts/**/*",
     "triage.conf",
+    "agents.conf",
     "jobs/noop/job.sh",
     "jobs/everyday-laws/**/*",
     "notes/**/*",

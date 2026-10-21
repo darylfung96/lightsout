@@ -7,7 +7,8 @@
 # agent step ran once and a rerun did not pay for it again, and writes the
 # artifact a job's gate checks next to the prompt as <prompt>.out.
 #
-#   FAKE_AGENT_LOG  append one "<iso>TAB<prompt>" line per call
+#   FAKE_AGENT_LOG  append one "<iso>TAB<prompt>TAB<profile>TAB<runner>TAB<model>"
+#                   line per call
 #   FAKE_AGENT_RC   exit code (default 0); a non-zero run writes no artifact
 #   FAKE_AGENT_OUT  artifact path (default <prompt>.out)
 set -euo pipefail
@@ -18,7 +19,9 @@ if [ -z "$prompt" ]; then
   exit 64
 fi
 if [ -n "${FAKE_AGENT_LOG:-}" ]; then
-  printf '%s\t%s\n' "$(date -Iseconds)" "$prompt" >> "$FAKE_AGENT_LOG"
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "$(date -Iseconds)" "$prompt" "${U_AGENT_PROFILE:-}" \
+    "${U_RUNNER:-}" "${U_AGENT_MODEL:-}" >> "$FAKE_AGENT_LOG"
 fi
 rc="${FAKE_AGENT_RC:-0}"
 case "$rc" in

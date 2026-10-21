@@ -94,6 +94,23 @@ applied, and then the job re-runs immediately, so the gate still decides. It is
 the default in the sample policy because the owner chose autonomous fixes; keep
 a source on `agent:propose` while you are learning how that source fails.
 
+## Which agent runs
+
+The repair path uses the same agent profile as the job, because a proposal
+written by one model should not be applied after a different model answered the
+lesson. `jobs/<name>/agent.conf` names the runner and, for `dsh`, the patch that
+pins provider, model, and effort; `agents.conf` can hold named profiles a job
+selects with `profile = <name>`. The manager resolves that file once for a run
+and once for a repair, so `run --auto-repair` and a hand-run `heal` take the same
+path. Read [agent-step.md](agent-step.md) for the fields and precedence.
+
+Because the pin has to stay visible after the call, `lightsout heal` prints the
+resolved profile before the runner starts, and the attempt's `meta.env` and the
+history's last column record it. A profile that names a `dsh` model without a
+patch is a config error, because `dsh` has no `--model` flag; a missing patch is
+a warning in `doctor` and a refusal at run time, so the manager never silently
+falls back to a different model.
+
 The validator is the boundary in both modes, because the prompt can be argued
 with and a path check cannot. It accepts only relative paths under an allowlist,
 refuses `job.sh` , `spec.md` , `state/` , `logs/` , `lib/` , and `spec/` ,
@@ -155,12 +172,13 @@ jobs/<name>/state/heal/
       prompt.md            rendered, redacted prompt
       runner.log           the runner's stdout and stderr
       proposal.json        what the agent returned
+      meta.env             action, keys, verdict, rc, cost, resolved agent
       verdict              passed, no-progress, timeout, violation, ...
       before, after        the failure keys around the attempt
       backup/              originals of edited files, mirrored
       applied.tsv          created/replaced records used by --revert
     attempt-2/
-  history.tsv              one line per attempt
+  history.tsv              one line per attempt; the last column is the agent
   lock/                    the job-level attempt lock
 logs/heal/
   2026-10-21.tsv           one line per agent call across jobs

@@ -434,7 +434,22 @@ pub fn run(repo: &Path, argv: &[String]) -> i32 {
         return 64;
     }
     let resolution = decide(&policy, &name, &blocked);
+    let profile = match crate::agent::resolve(repo, &name, true) {
+        Ok(profile) => Some(profile),
+        Err(error) => {
+            if resolution.action.is_agent() {
+                eprintln!("agent profile: {error}");
+                return 64;
+            }
+            eprintln!("agent profile: {error}");
+            None
+        }
+    };
     let key = failure_key(&blocked);
+    let agent_json = profile
+        .as_ref()
+        .filter(|profile| profile.configured || resolution.action.is_agent())
+        .map(|profile| profile.to_json());
     let heals = heal_count(&paths.state);
     let workspace = workspace_heal_count(repo);
     let max = max_heals();
@@ -459,6 +474,7 @@ pub fn run(repo: &Path, argv: &[String]) -> i32 {
             "workspace_heals_today": workspace,
             "max_heals_total": max_total,
             "key": key,
+            "agent": agent_json,
             "note": resolution.note,
         });
         println!("{}", serde_json::to_string(&body).expect("triage json"));
@@ -491,6 +507,11 @@ pub fn run(repo: &Path, argv: &[String]) -> i32 {
         }
     }
     println!("heals today: {heals} of {max}; workspace: {workspace} of {max_total}");
+    if let Some(profile) = &profile {
+        if profile.configured || resolution.action.is_agent() {
+            println!("agent: {}", profile.describe());
+        }
+    }
     println!("next: {}", next_command(&name, &resolution.action));
     0
 }

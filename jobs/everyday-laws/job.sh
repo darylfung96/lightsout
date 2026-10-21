@@ -50,8 +50,10 @@ U_MEMORY="${U_MEMORY:-1}"
 U_MEMORY_FILES="${U_MEMORY_FILES:-notes/60-log.md}"
 export U_MEMORY U_MEMORY_FILES
 
-# The dsh patch pins the provider and model for the lesson agent; without it a
-# headless run depends on GUI session settings (automation/README.md).
+# jobs/everyday-laws/agent.conf pins the same dsh patch for the lesson and for
+# the repair path; this fallback keeps a direct job.sh invocation working when
+# the manager is not in the loop. Without the patch a headless run depends on
+# GUI session settings (automation/README.md).
 if [ -z "${U_AGENT_PATCH:-}" ] && [ -f "$VIDEO_REPO/automation/headless.patch.yml" ]; then
   U_AGENT_PATCH="$VIDEO_REPO/automation/headless.patch.yml"
 fi

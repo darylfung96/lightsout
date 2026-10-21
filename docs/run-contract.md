@@ -53,6 +53,12 @@ loop because the fix did not move the failure.
 | `MAX_AUTO_ATTEMPTS` | attempts per invocation | 3 |
 | `MAX_REPAIRS` | deterministic repairs per job per day | 2 |
 | `U_AGENT_TIMEOUT` | seconds per runner call | 600 |
+| `U_RUNNER` | the job's adapter (`dsh`, `claude`, `codex`, `fake`) | profile or `dsh` |
+| `U_HEAL_RUNNER` | the repair adapter; overrides `U_RUNNER` for a heal | profile or `dsh` |
+| `U_AGENT_MODEL` | adapter model id; passed to `claude`/`codex`, checked for `dsh` | profile |
+| `U_AGENT_PATCH` | `dsh` overlay that pins provider, model and effort | profile |
+| `U_AGENT_EFFORT` | `dsh` reasoning effort; checked against the patch | profile |
+| `U_AGENT_PROFILE` | the resolved profile, set by the manager for the job | resolved |
 
 An agent returns a JSON proposal of file edits under `jobs/<name>/` ; the
 manager validates every path before it writes, because the proposal is data and
@@ -85,9 +91,14 @@ without a notification every ten minutes.
 
 A workspace is a directory with a `lightsout.toml` marker recording `schema`
 and the `manager` version that wrote it. `lightsout init` writes the marker and
-the minimum runnable office; `lightsout doctor` checks it. The manager walks up
-from the current directory for the marker, or from its own installation path,
-and accepts `--workspace DIR` or `LIGHTSOUT_REPO` as an explicit override. A
+the minimum runnable office; `lightsout doctor` checks it. A job may add
+`jobs/<name>/agent.conf` to pin its agent runner and model, and the workspace
+may add `agents.conf` with named profiles a job selects by name; a missing
+`agent.conf` leaves the runner's own default in place. Read
+[agent-step.md](agent-step.md) for the grammar and precedence. The manager
+walks up from the current directory for the marker, or from its own installation
+path, and accepts `--workspace DIR` or `LIGHTSOUT_REPO` as an explicit
+override. A
 legacy checkout with `jobs/` and `lib/` but no marker is still readable, and
 `doctor` reports it as a legacy workspace.
 
@@ -123,7 +134,8 @@ state/
   diagnosis.md        read-only report from `job diagnose`; the block is its input, not its output
   repairs/<date>.count repairs run today; `MAX_REPAIRS` (default 2) caps the loop
   heal/<date>/attempt-N/  one repair or agent attempt: prompt, proposal, verdict, backup
-  heal/history.tsv    one line per attempt, including repair and apply events
+  heal/history.tsv    one line per attempt, including repair and apply events;
+                      the last column is the resolved agent profile
   last                <iso>TAB<exit code>TAB<verb>
   start               <iso>TAB<epoch> written before the job runs, so the history has the job's own clock
   runs.tsv            <start-iso>TAB<end-iso>TAB<rc>TAB<verb>TAB<unit>TAB<seconds>, one line per completed run

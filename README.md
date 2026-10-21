@@ -18,7 +18,8 @@ This repository builds them once.
 - **Gates** — named pass/fail checks on artifacts, each a stub that fails closed
   until implemented. `lightsout gate`
 - **An agent step** — prompt file, headless run, contract gate, staged output,
-  never retried. `docs/agent-step.md`
+  never retried. A per-job profile pins the runner and model, and the repair
+  path uses the same one. `docs/agent-step.md`
 - **Bounded auto-repair** — `triage.conf` routes a blocked job to a
   deterministic repair, an agent proposal, an agent apply, or a human; caps,
   validation and backups bound the attempt. `docs/auto-repair.md`
@@ -62,6 +63,7 @@ bin/          job and report launchers, plus scaffold
 jobs/<name>/  one directory per automation: job.sh, spec.md, state/, logs/, out/
 spec/         the intent format, plus examples
 triage.conf   the workspace auto-repair policy
+agents.conf   named agent profiles (a job opts in with jobs/<name>/agent.conf)
 tests/        the 261 contract checks, auto-repair tests and workspace tests
 packaging/    Homebrew formula and macOS signing helper
 install.sh    checksum-verifying release installer
@@ -78,7 +80,7 @@ safely when something is wrong.
 ## Tests
 
 ```sh
-cargo test      # 261 ported checks, auto-repair tests and workspace tests (macOS)
+cargo test      # 261 ported checks, auto-repair, agent-profile and workspace tests (macOS)
 tests/run.sh    # the same 261 checks through the shell jobs and the binary
 tests/install.sh  # installer checks against a local fake release (portable)
 ```

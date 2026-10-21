@@ -1,6 +1,7 @@
 //! lightsout — one binary for the manager: the run contract, artifact gates,
 //! the dashboard and the workspace lifecycle. `jobs/<name>/job.sh` stays shell.
 
+mod agent;
 mod clock;
 mod commands;
 mod diagnose;
