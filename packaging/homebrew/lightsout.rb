@@ -15,7 +15,7 @@ class Lightsout < Formula
   test do
     assert_match version.to_s, shell_output("#{bin}/lightsout --version")
     system bin/"lightsout", "init", testpath/"office"
-    assert_predicate testpath/"office/lightsout.toml", :exist?
-    assert_predicate testpath/"office/jobs/noop/job.sh", :exist?
+    assert_path_exists testpath/"office/lightsout.toml"
+    assert_path_exists testpath/"office/jobs/noop/job.sh"
   end
 end
