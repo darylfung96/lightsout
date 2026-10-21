@@ -17,5 +17,7 @@ class Lightsout < Formula
     system bin/"lightsout", "init", testpath/"office"
     assert_path_exists testpath/"office/lightsout.toml"
     assert_path_exists testpath/"office/jobs/noop/job.sh"
+    assert_path_exists testpath/"office/triage.conf"
+    assert_path_exists testpath/"office/lib/heal.sh"
   end
 end

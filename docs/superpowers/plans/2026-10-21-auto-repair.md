@@ -415,8 +415,7 @@ is local.
 ### Containment (v1 vs v2)
 
 `u_agent` runs the configured runner with whatever tools it has, so a prompt
-that says 'do not edit files' is not a sandbox. A prompt that says "do not edit
-files" is not a sandbox. v1 ships a tripwire:
+that says 'do not edit files' is not a sandbox. v1 ships a tripwire:
 
 - before the runner, record `(path, size, mtime)` for every file under
   `jobs/<name>/` except `state/heal/`, plus `lib/`, `spec/`, `triage.conf`;
