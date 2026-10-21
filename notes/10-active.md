@@ -63,7 +63,8 @@ verdicts, because this page only records the state.
 Verified 2026-10-21: `cargo test` passes with 36 auto-repair tests, the 261
 ported checks, the workspace tests and the shell suite; `tests/install.sh`
 remains green. v0.1.0 is published at
-`https://github.com/darylfung96/lightsout/releases/tag/v0.1.0`, the four
+`https://github.com/darylfung96/lightsout/releases/tag/v0.1.0` (release
+`419883596`, tag at `a50270c`), the four
 archive checksums and `install.sh` were verified, the public installer
 initialized a workspace and ran `noop`, and the Homebrew formula at 0.1.0
 passes `brew audit --strict --online`. Keep the first real use supervised by
@@ -90,7 +91,7 @@ passes 261 checks, and `tests/install.sh` passes 11 checks. Because each path
 has its own failure mode, the profile tests exercise named selection, dsh patch
 validation, a model mismatch, the repair path, the missing-patch warning/refusal
 and an unknown key. Commit `48a15de` is on `main`, and CI run `39645810534`
-passed.
+passed; release run `39648697624` also succeeded.
 
 ## Port shape
 

@@ -66,7 +66,10 @@ There is one release tag, `v0.1.0`, and it carries the whole feature set: the
 run contract, the workspace lifecycle, bounded auto-repair and agent profiles.
 The release workflow builds four targets and publishes checksums plus
 `install.sh`, and the tap at `darylfung96/homebrew-lightsout` builds from the
-tag tarball. Verified 2026-10-21: the release workflow passed, a public install
+tag tarball. The tag is `v0.1.0` at `a50270c`, release `419883596`, and the
+formula pins sha256
+`b99eecaaf4b22cfc08355f81dac3416a3df88b4c27d3f2365d97b50e3522dac9`.
+Verified 2026-10-21: the release workflow passed, a public install
 from the release URL verified its checksum, initialized a workspace, passed
 `doctor` and ran `noop`, and the Homebrew formula passed
 `brew audit --strict --online`. The release also carries the migration from
