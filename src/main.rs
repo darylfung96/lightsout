@@ -8,6 +8,7 @@ mod gates;
 mod repo;
 mod state;
 mod status;
+mod triage;
 mod workspace;
 
 use std::env;
@@ -103,6 +104,7 @@ fn run(argv: &[String]) -> i32 {
             }
         },
         "retry" => with_workspace(|root| commands::retry(root, rest)),
+        "triage" => with_workspace(|root| triage::run(root, rest)),
         "run" | "resume" => run_verb(verb, rest),
         _ => {
             println!("{}", commands::USAGE);

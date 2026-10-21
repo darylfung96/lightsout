@@ -12,11 +12,29 @@ Every job in `jobs/` implements this interface and nothing invents its own.
 | `job check [name]` | alarm when a run that was due never happened; one notification per job per day | 0 / 2 |
 | `job diagnose <name>` | explain the current stop from files; writes `state/diagnosis.md`, changes nothing else | 0 |
 | `job retry <name>` | run an allowlisted repair for a `retryable` block, then the job again so the same gate decides | 0 / 1 / 2 |
+| `job triage <name>` | print how the current block routes through `triage.conf`; touch nothing | 0 / 64 |
 | `job resume <name>` | identical to `run`; kept as a word for humans | 0 / 1 / 2 |
 | `job unblock <name>` | clear a blocked marker, after a human looks | 0 |
 
 `plan` is not a simulation of the code path; it is the same guards run in a
 read-only mode that reports what `run` would decide.
+
+## Triage policy
+
+`triage.conf` at the workspace root maps `(job, source)` to one of four
+actions — `human`, `repair:<name>`, `agent:propose` or `agent:apply`; a human
+edits the file and the manager only reads it. Write one rule per line,
+whitespace-separated; `#` starts a comment and `*` is a wildcard. Resolution
+tries exact `(job, source)`, then `(job, *)`, then `(*, source)`, then
+`(*, *)`; the first match wins and a duplicate exact rule is a config error. A
+missing file routes every block to `human`, so auto-repair is opt-in.
+
+`lightsout triage <job>` prints the action, the matching rule, the failure key
+and today's attempt counts, and writes nothing, because the decision has to be
+inspectable before anyone acts on it. `--json` is the same data for a
+scheduler. A malformed file makes `triage`, `heal` and `run --auto-repair` exit
+`64` with the line number; plain `run`, `status`, `report` and `check` never
+read it.
 
 ## Exit codes
 

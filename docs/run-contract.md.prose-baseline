@@ -1,0 +1,14 @@
+# accepted legacy flags for prose-lint; one id per line
+6f4d1f7cd2c7  # Every job in `jobs/` implements this interface and nothing invents its own.
+4a46f09df590  # The distinction is the whole point.
+04b03e0429da  # The manager walks up from the current directory for the marker, or from its own installati
+bbc168c9799c  # A legacy checkout with `jobs/` and `lib/` but no marker is still readable, and `doctor` re
+7496230b1fc8  # It is the single most important file in the directory, and every stage that costs money mu
+35b8722191c0  # `state/expect` is one line, `HH:MM` local: the time a run is due.
+f6b5bd5e7e81  # A job whose time has been reached with no `done/<today>`, no `lock`, no `blocked` marker a
+25d721022096  # A hold is not a miss.
+51c836929298  # `bin/job check` is the alarm.
+86ce3a0a8ff6  # Before it execs the job, `bin/job` writes `state/start` as `<iso>TAB<epoch>`, and `record`
+6ad332ecedd1  # Timing the whole `bin/job` process instead would turn a fast held tick into a slow run and
+a128f1aee548  # `status --json` reports the last ten runs as `runs`, oldest first, each with `start`, `end
+4e1a246a2990  # The lock is `state/resources/<name>.lock`, one line `<pid>TAB<expiry-epoch>`.

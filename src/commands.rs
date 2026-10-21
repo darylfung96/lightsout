@@ -34,6 +34,9 @@ pub const USAGE: &str = "usage: lightsout [--workspace DIR] <verb> [name]
                        run the allowlisted repair R (default touch-missing)
                        for a retryable block, then the job again so the same
                        gate decides; capped by MAX_REPAIRS (default 2)
+  triage <name> [--json]
+                       show how the current block routes through triage.conf;
+                       writes nothing
   resume <name>        same as run
   unblock <name>       clear a blocked marker after a human looks
   gate <gate> [opts]   artifact gates (see lightsout gate --help)
@@ -341,7 +344,7 @@ fn notify(repo: &Path, alerts: &Path, check_log: &Path, title: &str, body: &str)
 }
 
 /// The allowlist is the set of `repair_<name>()` functions in `lib/repairs.sh`.
-fn registered_repairs(repo: &Path) -> Vec<String> {
+pub(crate) fn registered_repairs(repo: &Path) -> Vec<String> {
     let mut names = Vec::new();
     let body = state::read_lossy(&repo.join("lib").join("repairs.sh"));
     for line in body.lines() {

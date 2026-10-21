@@ -345,6 +345,27 @@ pub fn doctor(root: &Path) -> i32 {
         require_file(root, rel, &mut errors);
     }
 
+    let policy_path = root.join(crate::triage::POLICY);
+    if policy_path.is_file() {
+        match crate::triage::Policy::load(&policy_path) {
+            Ok(policy) => match policy.check_repairs(root) {
+                Ok(()) => {
+                    ok("triage.conf");
+                    for message in policy.warnings(root) {
+                        warning(&mut warnings, &message);
+                    }
+                }
+                Err(error) => fail(&mut errors, &format!("triage.conf: {error}")),
+            },
+            Err(error) => fail(&mut errors, &format!("triage.conf: {error}")),
+        }
+    } else {
+        warning(
+            &mut warnings,
+            "triage.conf is missing; every block routes to a human",
+        );
+    }
+
     let jobs_dir = root.join("jobs");
     let mut job_bodies: Vec<(String, String)> = Vec::new();
     if !jobs_dir.is_dir() {
