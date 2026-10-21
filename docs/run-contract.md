@@ -30,6 +30,16 @@ The distinction is the whole point. A blocked job notifies once and then stays
 quiet while still exiting `2`, so a scheduler sees a persistent non-zero state
 without a notification every ten minutes.
 
+## Workspace
+
+A workspace is a directory with a `lightsout.toml` marker recording `schema`
+and the `manager` version that wrote it. `lightsout init` writes the marker and
+the minimum runnable office; `lightsout doctor` checks it. The manager walks up
+from the current directory for the marker, or from its own installation path,
+and accepts `--workspace DIR` or `LIGHTSOUT_REPO` as an explicit override. A
+legacy checkout with `jobs/` and `lib/` but no marker is still readable, and
+`doctor` reports it as a legacy workspace.
+
 ## Environment a job receives
 
 `bin/job` sets these before sourcing the job:
@@ -47,6 +57,8 @@ U_BLOCK_CLASS   default class for a block raised in this run (human unless
                 `bin/job run --class` says otherwise)
 U_BLOCK_SOURCE  default source for a block raised in this run (unknown unless
                 `bin/job run --source` says otherwise)
+LIGHTSOUT_BIN   path to the manager binary, so lib/guards.sh runs the same
+                gate implementation
 ```
 
 ## State layout
@@ -68,7 +80,7 @@ state/
                          when its pid is dead or the deadline has passed
 ```
 
-`lib/diagnose.py` reads the blocked line, the log up to the block, and `out/`,
+`lightsout diagnose` reads the blocked line, the log up to the block, and `out/`,
 then writes `state/diagnosis.md` and exits `0` even while the job stays blocked,
 so a human can read what happened without disturbing the stop. Because only a
 human (`unblock`) or a passing run (`u_done`) may clear the marker, diagnose
@@ -145,7 +157,7 @@ seconds so that one damaged file cannot remove a run from the history.
 `status --json` reports the last ten runs as `runs`, oldest first, each with
 `start`, `end`, `rc`, `verb`, `unit` and `seconds`, plus the newest run's
 integer `last_duration` (or `null` before the first run). The HTML table from
-`bin/report --html` adds `duration` and `last 5 runs`, because the page is read
+`lightsout report --html` adds `duration` and `last 5 runs`, because the page is read
 by a person scanning for a run that got slower and the file keeps the full
 history.
 

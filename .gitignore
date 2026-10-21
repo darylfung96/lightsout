@@ -4,3 +4,6 @@ jobs/*/state/
 jobs/*/out/
 out/
 *.tmp
+/target/
+/bin/lightsout
+.DS_Store

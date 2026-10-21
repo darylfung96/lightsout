@@ -7,12 +7,12 @@
 export U_PI_MEMORY="${U_PI_MEMORY:-$HOME/pi-memory}"
 
 # u_memory_check — the whole pass as one gate: save each named note, lint the
-# store, then prove the receipt, and fail when any step does (lib/gates.py
+# store, then prove the receipt, and fail when any step does (lightsout gate
 # memory). A plain status, not a block, because the job decides how to report
 # the stop; U_MEMORY_FILES is the space-separated list the job already sets.
 u_memory_check() {
   local files="${U_MEMORY_FILES:-}"
-  python3 "$REPO/lib/gates.py" memory --files "${files// /,}"
+  "${LIGHTSOUT_BIN:-$REPO/bin/lightsout}" gate memory --files "${files// /,}"
 }
 
 # Steps 0-5 of the policy, minus the judgment in step 0: a job only calls this

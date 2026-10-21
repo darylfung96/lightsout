@@ -9,8 +9,9 @@ letting any job write notes.
 - **Exit codes are the interface.** `0` done or deliberately held, `1` failed,
   `2` blocked and needs a human. A job that cannot finish must exit `2` and
   record why — a silent `0` is the failure this repository exists to prevent.
-- **Gates fail closed.** An unimplemented check is `gates.py never`, never a
-  missing line. A job may not publish until every gate in its spec resolves.
+- **Gates fail closed.** An unimplemented check is `lightsout gate never`
+  (`u_gate never` in a job), never a missing line. A job may not publish until
+  every gate in its spec resolves.
 - **State is files under `jobs/<name>/state/`.** No database, no hidden cache.
   If `bin/job status` cannot explain a job, the job is wrong.
 - **Scripts before agents.** Anything checkable becomes a gate, not a sentence

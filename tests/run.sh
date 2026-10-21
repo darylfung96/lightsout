@@ -6,6 +6,14 @@ cd "$REPO"
 export U_NOTIFY=0 U_MEMORY=0
 fails=0
 
+# The manager is the Rust binary. Build it here so a fresh checkout can run the
+# shell reference suite without a separate setup step.
+(cd "$REPO" && cargo build --release) >/dev/null || {
+  echo "tests/run.sh: cargo build --release failed" >&2
+  exit 1
+}
+cp "$REPO/target/release/lightsout" "$REPO/bin/lightsout"
+
 # The suite drives fixed paths under jobs/, so two concurrent runs trample each
 # other and report phantom failures. Hold a lock instead.
 tests_lock="${TMPDIR:-/tmp}/lightsout-tests.lock"
@@ -598,7 +606,7 @@ shots=$(mktemp -d "${TMPDIR:-/tmp}/lightsout-shots.XXXXXX")
 
 # the shot an approval step has not reached yet
 printf '[{"shot":1,"query":"staff badge","file":"%s","approved":false}]' "$hello" > /tmp/shots.json
-out=$(lib/gates.py manifest --file /tmp/shots.json --min 1); rc=$?
+out=$(bin/lightsout gate manifest --file /tmp/shots.json --min 1); rc=$?
 check "an unapproved shot fails" 1 "$rc"
 case "$out" in
   *"shot 1"*"staff badge"*"not approved"*)
@@ -608,12 +616,12 @@ esac
 
 # the same shot, approved, with the file the manifest points at
 printf '[{"shot":1,"query":"staff badge","file":"%s","approved":true}]' "$hello" > /tmp/shots.json
-lib/gates.py manifest --file /tmp/shots.json --min 1 >/dev/null
+bin/lightsout gate manifest --file /tmp/shots.json --min 1 >/dev/null
 check "an approved shot with its file passes" 0 "$?"
 
 # every shot approved but one file missing: approval is not enough
 printf '[{"shot":2,"query":"staff badge","file":"%s/nope.mp4","approved":true}]' "$shots" > /tmp/shots.json
-out=$(lib/gates.py manifest --file /tmp/shots.json --min 1); rc=$?
+out=$(bin/lightsout gate manifest --file /tmp/shots.json --min 1); rc=$?
 check "an approved shot with no file fails" 1 "$rc"
 case "$out" in
   *"shot 2"*"missing"*) echo "ok   the failure names the missing file" ;;
@@ -621,13 +629,13 @@ case "$out" in
 esac
 
 printf '[{"shot":3,"query":"staff badge","file":"%s/empty.mp4","approved":true}]' "$shots" > /tmp/shots.json
-lib/gates.py manifest --file /tmp/shots.json --min 1 >/dev/null
+bin/lightsout gate manifest --file /tmp/shots.json --min 1 >/dev/null
 check "an empty shot file fails" 1 "$?"
 
 # the first unapproved shot is the one named, not merely the first entry
 printf '[{"shot":1,"query":"staff badge","file":"%s","approved":true},{"shot":2,"query":"lobby door","file":"%s","approved":false}]' \
   "$hello" "$hello" > /tmp/shots.json
-out=$(lib/gates.py manifest --file /tmp/shots.json --min 2); rc=$?
+out=$(bin/lightsout gate manifest --file /tmp/shots.json --min 2); rc=$?
 check "one unapproved shot fails a longer manifest" 1 "$rc"
 grep -q "shot 2" <<<"$out"
 check "the message names the first unapproved shot" 0 "$?"
@@ -638,7 +646,7 @@ esac
 
 # a short manifest is a failure even when every entry it has is approved
 printf '[{"shot":1,"query":"staff badge","file":"%s","approved":true}]' "$hello" > /tmp/shots.json
-out=$(lib/gates.py manifest --file /tmp/shots.json --min 2); rc=$?
+out=$(bin/lightsout gate manifest --file /tmp/shots.json --min 2); rc=$?
 check "a manifest short of --min fails" 1 "$rc"
 case "$out" in
   *"1 shot, want at least 2"*) echo "ok   the failure counts the shots" ;;
@@ -647,21 +655,21 @@ esac
 
 printf '[{"shot":1,"query":"staff badge","file":"%s","approved":true},{"shot":2,"query":"lobby door","file":"%s","approved":true}]' \
   "$hello" "$hello" > /tmp/shots.json
-lib/gates.py manifest --file /tmp/shots.json --min 2 >/dev/null
+bin/lightsout gate manifest --file /tmp/shots.json --min 2 >/dev/null
 check "two approved shots meet --min" 0 "$?"
 
 # a manifest that cannot be read fails closed
 printf 'not json' > /tmp/shots.json
-lib/gates.py manifest --file /tmp/shots.json --min 1 >/dev/null
+bin/lightsout gate manifest --file /tmp/shots.json --min 1 >/dev/null
 check "malformed manifest JSON fails" 1 "$?"
-lib/gates.py manifest --file "$shots/nope.json" --min 1 >/dev/null
+bin/lightsout gate manifest --file "$shots/nope.json" --min 1 >/dev/null
 check "a missing manifest fails" 1 "$?"
 printf '[]' > /tmp/shots.json
-lib/gates.py manifest --file /tmp/shots.json >/dev/null
+bin/lightsout gate manifest --file /tmp/shots.json >/dev/null
 check "an empty manifest fails" 1 "$?"
 
 printf '{"shot":1}\n' > /tmp/shots.json
-lib/gates.py manifest --file /tmp/shots.json >/dev/null
+bin/lightsout gate manifest --file /tmp/shots.json >/dev/null
 check "a manifest that is not a list fails" 1 "$?"
 
 rm -rf "$shots" /tmp/shots.json
@@ -702,7 +710,7 @@ check "the receipt is asked for this workspace" "receipt --latest --cwd $PWD" \
 
 # the gate names the step that failed: any one of the three stops the pass
 out=$(HOME="$memory_home" U_PI_MEMORY="$fake_memory" FAKE_MEMORY_RC=0 \
-  FAKE_MEMORY_FAIL=save lib/gates.py memory --files notes/00-index.md 2>&1); rc=$?
+  FAKE_MEMORY_FAIL=save bin/lightsout gate memory --files notes/00-index.md 2>&1); rc=$?
 check "a save failure fails the memory gate" 1 "$rc"
 case "$out" in
   *"save notes/00-index.md failed"*) echo "ok   the gate names the failed save" ;;
@@ -710,7 +718,7 @@ case "$out" in
 esac
 
 out=$(HOME="$memory_home" U_PI_MEMORY="$fake_memory" FAKE_MEMORY_RC=0 \
-  FAKE_MEMORY_FAIL=lint lib/gates.py memory 2>&1); rc=$?
+  FAKE_MEMORY_FAIL=lint bin/lightsout gate memory 2>&1); rc=$?
 check "a lint failure fails the memory gate" 1 "$rc"
 case "$out" in
   *"lint failed"*) echo "ok   the gate names the failed lint" ;;
@@ -718,7 +726,7 @@ case "$out" in
 esac
 
 out=$(HOME="$memory_home" U_PI_MEMORY="$fake_memory" FAKE_MEMORY_RC=0 \
-  FAKE_MEMORY_FAIL=receipt lib/gates.py memory 2>&1); rc=$?
+  FAKE_MEMORY_FAIL=receipt bin/lightsout gate memory 2>&1); rc=$?
 check "a receipt failure fails the memory gate" 1 "$rc"
 case "$out" in
   *"receipt failed"*) echo "ok   the gate names the failed receipt" ;;
@@ -727,7 +735,7 @@ esac
 
 # an unreadable store is a failure, never a skipped check
 HOME="$memory_home" U_PI_MEMORY="$fake_memory/missing" FAKE_MEMORY_RC=0 \
-  lib/gates.py memory >/dev/null 2>&1
+  bin/lightsout gate memory >/dev/null 2>&1
 check "a missing store fails closed" 1 "$?"
 
 rm -rf "$memory_home" "$memory_log"

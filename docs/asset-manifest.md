@@ -29,7 +29,7 @@ staff badge and stage 3 would still begin.
 ## The gate
 
 ```sh
-python3 lib/gates.py manifest --file out/shots.json --min 15
+bin/lightsout gate manifest --file out/shots.json --min 15
 ```
 
 It exits `1` and names the first shot a human has to act on:

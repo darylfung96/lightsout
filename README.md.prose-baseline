@@ -1,0 +1,10 @@
+# accepted legacy flags for prose-lint; one id per line
+8c8cf479c5c5  # A standard office for jobs that run without a human.
+d18f9b9e694e  # Each automation is a robot worker.
+bd236d7bcd3f  # Every robot needs the same four things: an alarm clock, a notebook of what it already fini
+de457825f2ef  # Building those by hand per automation is how you get five robots that each fail differentl
+0883812bbb46  # This repository builds them once.
+7d8eee468cac  # Lights-out manufacturing is the old name for a factory that runs with the lights off: nobo
+45761cbc740a  # Not a scheduler — launchd, cron, systemd, or a DSH reminder decides *when*.
+9247797a9273  # Not a workflow editor.
+81e96c104434  # The rule that keeps it honest: a job is a directory, its state is files, and `bin/job stat

@@ -1,0 +1,4 @@
+# LightsOut workspace marker. Written by `lightsout init`.
+# schema is the workspace contract; manager is the binary that wrote it.
+schema = 1
+manager = "0.1.0"

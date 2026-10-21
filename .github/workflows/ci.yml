@@ -1,0 +1,54 @@
+name: ci
+
+# The 261 contract checks drive macOS-specific shell fixtures (`md5`,
+# `stat -f`, `date -r`), so the full suite runs on macOS. The workspace and
+# installer tests are portable and run on Linux as well.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  contract:
+    name: contract (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.1
+          components: rustfmt, clippy
+      - name: format
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test --locked
+      - name: shell reference suite
+        run: tests/run.sh
+
+  portable:
+    name: portable (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.1
+          components: rustfmt, clippy
+      - name: format
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: workspace lifecycle tests
+        run: cargo test --locked --bin lightsout --test workspace_cli --test check_manifest
+      - name: installer test
+        run: sh tests/install.sh

@@ -19,7 +19,7 @@ budget        money and minutes per run, and per day
 ## Rules
 
 1. **Every stage names a gate.** A stage without a gate is a stage nobody can
-   trust. If the gate does not exist yet, it is `gates.py never` and the job may
+   trust. If the gate does not exist yet, it is `lightsout gate never` and the job may
    not be enabled.
 2. **Numbers, not adjectives.** "About a minute" is unverifiable; `duration
    --min 55 --max 65` is a gate.

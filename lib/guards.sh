@@ -70,7 +70,7 @@ u_sh() {
 # u_gate <name> [args] — the only way a stage says it succeeded.
 u_gate() {
   if [ "$DRY" = 1 ]; then u_say "plan: would check $1"; return 0; fi
-  python3 "$REPO/lib/gates.py" "$@" || u_block "gate failed: $*"
+  "${LIGHTSOUT_BIN:-$REPO/bin/lightsout}" gate "$@" || u_block "gate failed: $*"
 }
 
 u_guard_day() {

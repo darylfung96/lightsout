@@ -16,16 +16,31 @@ This repository builds them once.
 - **Guards** — day guard, attempt cap, single-run lock, disk check, blocked
   marker, one desktop notification. `lib/guards.sh`
 - **Gates** — named pass/fail checks on artifacts, each a stub that fails closed
-  until implemented. `lib/gates.py`
+  until implemented. `lightsout gate`
 - **An agent step** — prompt file, headless run, contract gate, staged output,
   never retried. `docs/agent-step.md`
 - **A memory pass** — the last stage of every job, so an unattended agent obeys
   the same replace-never-append rules a session does. `docs/memory-pass.md`
 - **Visibility** — `bin/report` renders every job's state from its state files.
 
-## Quickstart
+## Install
 
 ```sh
+cargo install --locked --path .    # install the manager once
+lightsout init ~/my-office         # write a versioned workspace
+cd ~/my-office
+lightsout doctor                   # check the workspace and its tools
+lightsout run noop                 # the fixture proves the loop
+```
+
+A release installer, Homebrew formula and the workspace marker are documented
+in [docs/install.md](docs/install.md). The repository itself is a workspace, so
+the development commands below still work from this checkout.
+
+## Quickstart in this checkout
+
+```sh
+cargo build --release              # build the manager once
 bin/job list                       # jobs that exist
 bin/job status --all               # one table, red rows first
 bin/job status --all --json        # same data for a page or a reminder
@@ -36,12 +51,16 @@ bin/report --html out/status.html  # static page, no server
 ## Layout
 
 ```
-docs/         run contract, agent step, memory pass, design notes
-lib/          guards.sh, gates.py, memory.sh, report.py
-bin/          job, report
+docs/         run contract, install, agent step, memory pass, design notes
+src/          the Rust manager: verbs, gates, dashboard, diagnose, workspace
+lib/          the shell job libraries: guards, locks, notify, agent, memory, repairs
+bin/          job and report launchers, plus scaffold
 jobs/<name>/  one directory per automation: job.sh, spec.md, state/, logs/, out/
 spec/         the intent format, plus examples
-tests/        a fixture job the kit runs against itself
+tests/        the 261 contract checks, workspace tests and installer test
+packaging/    Homebrew formula and macOS signing helper
+install.sh    checksum-verifying release installer
+lightsout.toml  this repository's workspace marker
 notes/        the wiki: index, log, decisions
 ```
 
@@ -54,8 +73,17 @@ safely when something is wrong.
 ## Tests
 
 ```sh
-tests/run.sh    # 18 checks against the noop fixture: held, blocked, unblock, plan
+cargo test      # 261 ported checks plus the workspace lifecycle tests (macOS)
+tests/run.sh    # the same 261 checks through the shell jobs and the binary
+tests/install.sh  # installer checks against a local fake release (portable)
 ```
+
+`jobs/<name>/job.sh` stays shell because it is the project-specific part, and it
+calls the shared `lib/*.sh` guards that every job uses. The manager's verbs,
+exit codes, gates, status, report and diagnose live in the single `lightsout`
+binary, so there is one implementation, one exit-code contract and one cargo
+test suite; the shell suite stays as a second executable check of the same
+contract.
 
 ## What it deliberately is not
 

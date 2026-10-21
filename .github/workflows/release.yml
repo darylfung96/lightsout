@@ -1,0 +1,116 @@
+name: release
+
+# Tag v0.1.0 or run this workflow manually. Assets are named by target, not
+# version, so the installer can select the right one for any release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (for example v0.1.0)
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    # The contract fixtures use macOS shell tools; run the full suite there
+    # before publishing any target.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.1
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: tests/run.sh
+      - run: sh tests/install.sh
+
+  build:
+    needs: test
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    env:
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+      MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+      MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-14
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.1
+          targets: ${{ matrix.target }}
+      - name: musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: build
+        run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: sign macOS binary
+        if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''
+        run: sh packaging/macos-sign.sh "target/${{ matrix.target }}/release/lightsout"
+      - name: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          asset="lightsout-${{ matrix.target }}.tar.gz"
+          tar -czf "dist/$asset" -C "target/${{ matrix.target }}/release" lightsout
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd dist && sha256sum "$asset" > "$asset.sha256")
+          else
+            (cd dist && shasum -a 256 "$asset" > "$asset.sha256")
+          fi
+          cat "dist/$asset.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lightsout-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: include the installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp install.sh dist/install.sh
+          (cd dist && sha256sum install.sh > install.sh.sha256)
+      - name: publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${TAG#refs/tags/}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* --generate-notes
+          fi

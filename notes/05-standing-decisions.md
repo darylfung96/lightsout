@@ -15,9 +15,11 @@ every ten minutes against a problem only a human can fix.
 
 ## D3 — Gates fail closed
 
-An unimplemented gate is `gates.py never`, so a job cannot reach publish while a
-check is missing. This is the difference between an automation that reports what
-it still needs and one that is confidently wrong.
+An unimplemented gate is `lightsout gate never`, so a job cannot reach publish
+while a check is missing. As of 2026-10-20 the manager is the Rust binary, and a
+shell job spells the same fail-closed stub `u_gate never`; this is the
+difference between an automation that reports what it still needs and one that
+is confidently wrong.
 
 ## D4 — The memory pass is a stage, not a habit
 
@@ -29,3 +31,16 @@ because the next session reads the same store.
 
 Every stage names a gate with numbers. A job that cannot state its unit cannot
 know what it already finished.
+
+## D6 — The binary is global, the workspace is local
+
+A workspace is a directory with a `lightsout.toml` marker, because the marker
+lets the binary find project state without guessing from an ancestor named
+`jobs/`. `lightsout init` writes the marker plus the runnable office, and
+`lightsout doctor` checks the schema, libraries, jobs and the tools those jobs
+actually reference. The binary is installed globally through Homebrew, cargo or
+the checksum-verifying release installer, because the manager upgrades
+independently of the job state; `--workspace` and `LIGHTSOUT_REPO` select a
+workspace explicitly for commands that run outside it. Verified 2026-10-21:
+`init`, `doctor`, the workspace launchers and the installer pass their tests,
+and both 261-check suites remain green.

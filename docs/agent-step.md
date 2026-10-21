@@ -28,7 +28,7 @@ render_prompt > "$prompt"
 # artifact instead of paying again; the gate runs every time and is the only
 # verdict.
 u_agent "$prompt" "$prompt.done" || u_die "agent failed"
-python3 lib/gates.py sections --file lesson.md --require Motivation,Mechanism \
+bin/lightsout gate sections --file lesson.md --require Motivation,Mechanism \
   --min-words 120 --max-words 160 || u_block "lesson failed the contract"
 ```
 

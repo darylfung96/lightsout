@@ -1,0 +1,4 @@
+# accepted legacy flags for prose-lint; one id per line
+ee8068963fab  # The daily video pipeline is ported as `jobs/everyday-laws`.
+51ff7abf5afd  # Two defects were found by review after the subagents signed off.
+be94fe711833  # It also spent an attempt per held tick, reaching the cap in half an hour.
