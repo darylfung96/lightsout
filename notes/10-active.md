@@ -85,13 +85,28 @@ as the last column of `state/heal/history.tsv`. `jobs/everyday-laws/agent.conf`
 now points at the video workspace's `headless.patch.yml`, so a repair no longer
 falls back to the bare headless profile.
 
-Verified 2026-10-21: `cargo test` passes 103 tests (27 unit, 7 agent-profile,
-36 auto-repair, 1 manifest, 12 + 11 contract groups, 9 workspace), `tests/run.sh`
-passes 261 checks, and `tests/install.sh` passes 11 checks. Because each path
-has its own failure mode, the profile tests exercise named selection, dsh patch
-validation, a model mismatch, the repair path, the missing-patch warning/refusal
-and an unknown key. Commit `48a15de` is on `main`, and CI run `39645810534`
-passed; release run `39648697624` also succeeded.
+Verified 2026-10-21: `cargo test` passes 107 tests (27 unit, 7 agent-profile,
+36 auto-repair, 1 manifest, 12 + 11 contract groups, 4 video-prune, 9 workspace),
+`tests/run.sh` passes 261 checks, and `tests/install.sh` passes 11 checks.
+Because each path has its own failure mode, the profile tests exercise named
+selection, dsh patch validation, a model mismatch, the repair path, the
+missing-patch warning/refusal and an unknown key. Commit `48a15de` is on `main`,
+and CI run `39645810534` passed; release run `39648697624` also succeeded.
+
+## Video prune
+
+`jobs/video-prune` is implemented as of 2026-10-21, because the video checkout
+had reached 98% capacity while the only cleanup was the build driver's
+emergency janitor. The job keeps the last three episodes fully intact and
+removes only `episodes/<NNN>/comp/*/renders/` for older episodes whose master
+exists and whose `pipeline/publish/queue.json` entry is `posted`; media, audio,
+comp assets, snapshots, the outbox and the queue stay untouched. A dry-run is
+the default and writes a plan; `PRUNE_APPLY=1` applies it. The first dry-run
+listed ten directories (3,521.6 MB) for episodes 016-025, and the apply moved
+free space from 3,605 MB to 7,131 MB. The launchd agent
+`com.everydaylaws.video-prune` runs the job at 23:30 daily. The job uses no
+agent and sets `U_MEMORY=0` because it writes no notes.
+
 
 ## Port shape
 

@@ -77,6 +77,13 @@ impl Sandbox {
             &source.join("jobs/everyday-laws/spec.md"),
             &root.join("jobs/everyday-laws/spec.md"),
         );
+        for rel in [
+            "jobs/video-prune/job.sh",
+            "jobs/video-prune/prune.py",
+            "jobs/video-prune/spec.md",
+        ] {
+            copy_file(&source.join(rel), &root.join(rel));
+        }
         for rel in ["jobs/everyday-laws/agent.conf", "agents.conf"] {
             let from = source.join(rel);
             if from.is_file() {

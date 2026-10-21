@@ -23,6 +23,9 @@ include = [
     "agents.conf",
     "jobs/noop/job.sh",
     "jobs/everyday-laws/**/*",
+    "jobs/video-prune/job.sh",
+    "jobs/video-prune/prune.py",
+    "jobs/video-prune/spec.md",
     "notes/**/*",
     "spec/**/*",
     "bin/job",
@@ -32,6 +35,7 @@ include = [
     "install.sh",
     "packaging/homebrew/lightsout.rb",
     "packaging/macos-sign.sh",
+    "packaging/launchd/**/*",
     "tests/**/*",
 ]
 

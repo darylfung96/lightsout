@@ -109,3 +109,27 @@ and the repair use the same OpenCode Zen model.
 Verified 2026-10-21: `tests/agent_profile.rs` passes 7 tests, and the existing
 auto-repair, workspace and 261-check suites pass. Committed as `48a15de` on
 `main`; CI run `39645810534` succeeded.
+
+## [2026-10-21] decision | video-prune removes only old posted render intermediates
+
+Added `jobs/video-prune` because the video checkout had reached 98% capacity
+with 4.4 GB free, and the only cleanup was `daily-build.sh`'s emergency janitor,
+which waits for 2.5 GB and then removes every render directory it finds. The new
+job keeps the last three episodes fully intact and removes only
+`episodes/<NNN>/comp/*/renders/` for older episodes whose master exists and whose
+`pipeline/publish/queue.json` entry is `posted`; media, audio, comp assets,
+snapshots, the outbox and the queue stay untouched, so the master remains and a
+recent episode can still be re-rendered. `PRUNE_APPLY=0` is the default and
+writes a plan; the launchd form sets `PRUNE_APPLY=1`.
+
+The first dry-run listed ten directories (3,521.6 MB) for episodes 016-025; the
+apply removed all ten and moved free space from 3,605 MB to 7,131 MB. A
+kickstart after the done marker existed logged `held: 2026-10-21 already done`,
+which is the day guard doing its job. The plist is
+`packaging/launchd/com.everydaylaws.video-prune.plist`, loaded as
+`com.everydaylaws.video-prune` at 23:30 daily. No agent is involved and
+`U_MEMORY=0` is explicit because the job writes no notes.
+
+Verified 2026-10-21: `tests/video_prune.rs` passes 4 tests (dry-run, apply, plan-is-read-only
+and symlink refusal), `cargo test` passes 107 tests, `tests/run.sh` passes 261
+checks, and `tests/install.sh` passes 11 checks.

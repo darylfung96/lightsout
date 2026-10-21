@@ -527,8 +527,16 @@ grep -q '<th>duration</th>' /tmp/lightsout-history.html
 check "the page names the duration" 0 "$?"
 grep -q '<th>last 5 runs</th>' /tmp/lightsout-history.html
 check "the page names the last 5 runs" 0 "$?"
-check "the page renders five recent runs" 5 \
-  "$(grep -o "class='run'" /tmp/lightsout-history.html | wc -l | tr -d ' ')"
+# The page has one row per job, so count the fixture's row rather than every
+# row in the workspace: another job with history must not change this check.
+page_runs=$(python3 - <<'PY'
+import re
+html = open('/tmp/lightsout-history.html').read()
+row = re.search(r"<tr class='[^']*'><td><b>noop</b>.*?</tr>", html, re.S).group(0)
+print(row.count("class='run'"))
+PY
+)
+check "the page renders five recent runs" 5 "$page_runs"
 
 # 18 — resource locks: a named resource lets one run through at a time; a busy
 # resource is a hold (exit 0, no work), and a lock left by a dead or expired
