@@ -13,6 +13,8 @@ Every job in `jobs/` implements this interface and nothing invents its own.
 | `job diagnose <name>` | explain the current stop from files; writes `state/diagnosis.md`, changes nothing else | 0 |
 | `job retry <name>` | run an allowlisted repair for a `retryable` block, then the job again so the same gate decides | 0 / 1 / 2 |
 | `job triage <name>` | print how the current block routes through `triage.conf`; touch nothing | 0 / 64 |
+| `job heal <name>` | run one agent attempt in the policy's mode; `--apply` applies the newest stored proposal, `--revert N` restores attempt N | 0 / 1 / 2 / 64 |
+| `job run <name> --auto-repair` | run, then make bounded repair or agent attempts from the policy | 0 / 1 / 2 / 64 |
 | `job resume <name>` | identical to `run`; kept as a word for humans | 0 / 1 / 2 |
 | `job unblock <name>` | clear a blocked marker, after a human looks | 0 |
 
@@ -35,6 +37,37 @@ inspectable before anyone acts on it. `--json` is the same data for a
 scheduler. A malformed file makes `triage`, `heal` and `run --auto-repair` exit
 `64` with the line number; plain `run`, `status`, `report` and `check` never
 read it.
+
+## Auto-repair
+
+`lightsout run <name> --auto-repair` (or `LIGHTSOUT_AUTO_REPAIR=1`) wraps a
+normal run in a bounded loop. It reads `triage.conf`, performs the action for
+the current block, re-runs the job, and compares the new failure key with the
+old one; a different key earns another attempt, while the same key stops the
+loop because the fix did not move the failure.
+
+| setting | scope | default |
+|---|---|---|
+| `MAX_HEALS` | agent calls per job per day | 2 |
+| `MAX_HEALS_TOTAL` | agent calls per workspace per day | 5 |
+| `MAX_AUTO_ATTEMPTS` | attempts per invocation | 3 |
+| `MAX_REPAIRS` | deterministic repairs per job per day | 2 |
+| `U_AGENT_TIMEOUT` | seconds per runner call | 600 |
+
+An agent returns a JSON proposal of file edits under `jobs/<name>/` ; the
+manager validates every path before it writes, because the proposal is data and
+the prompt is not a boundary. The default allowlist is `out/` , widened by
+`jobs/<name>/repair.allow` ; `job.sh` , `spec.md` , `state/` , `logs/` , `lib/`
+, and `spec/` are refused even when an allow entry names them. Apply is atomic
+per file with a backup, so a failed batch rolls back and `heal --revert` can
+restore an applied attempt. The gate that rejected the artifact is still the
+only thing that may pass it; an agent edit is input, not a verdict.
+
+The manager does not sandbox the agent, because adapter-level read-only modes
+are a follow-up; v1 takes a metadata fingerprint of the job and code directories
+before the runner, detects unexpected writes, and refuses the proposal. Read
+`docs/auto-repair.md` for the prompt contract, the validation rules, and the
+failure verdicts, because this contract only names the interface.
 
 ## Exit codes
 
@@ -89,6 +122,8 @@ state/
   blocked             <iso>TAB<class>TAB<source>TAB<reason> — one line, current reason only
   diagnosis.md        read-only report from `job diagnose`; the block is its input, not its output
   repairs/<date>.count repairs run today; `MAX_REPAIRS` (default 2) caps the loop
+  heal/<date>/attempt-N/  one repair or agent attempt: prompt, proposal, verdict, backup
+  heal/history.tsv    one line per attempt, including repair and apply events
   last                <iso>TAB<exit code>TAB<verb>
   start               <iso>TAB<epoch> written before the job runs, so the history has the job's own clock
   runs.tsv            <start-iso>TAB<end-iso>TAB<rc>TAB<verb>TAB<unit>TAB<seconds>, one line per completed run

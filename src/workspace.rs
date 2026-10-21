@@ -58,6 +58,20 @@ const NOTIFY: &str = include_str!("../lib/notify.sh");
 const AGENT: &str = include_str!("../lib/agent.sh");
 const MEMORY: &str = include_str!("../lib/memory.sh");
 const REPAIRS: &str = include_str!("../lib/repairs.sh");
+const HEAL: &str = include_str!("../lib/heal.sh");
+const REPAIR_PROMPT: &str = include_str!("../lib/prompts/repair.md");
+const TRIAGE_CONF: &str = "\
+# LightsOut triage policy. One rule per line: <job> <source> <action>.
+# A missing file routes every block to a human; this sample is safe.
+#
+#   *                  lock           repair:stale-marker
+#   everyday-laws      gate:duration  agent:apply
+#   everyday-laws      gate:sections  agent:propose
+#
+# Actions: human, repair:<name>, agent:propose, agent:apply.
+# Precedence: exact, then (job, *), then (*, source), then (*, *).
+* * human
+";
 const NOOP_JOB: &str = include_str!("../jobs/noop/job.sh");
 const SCHEMA: &str = include_str!("../spec/SCHEMA.md");
 const DIGEST_SPEC: &str = include_str!("../spec/examples/digest.md");
@@ -83,6 +97,8 @@ fn templates() -> Vec<TemplateFile> {
         file("lib/agent.sh", AGENT, 0o644),
         file("lib/memory.sh", MEMORY, 0o644),
         file("lib/repairs.sh", REPAIRS, 0o644),
+        file("lib/heal.sh", HEAL, 0o644),
+        file("lib/prompts/repair.md", REPAIR_PROMPT, 0o644),
         file("jobs/noop/job.sh", NOOP_JOB, 0o755),
         file("spec/SCHEMA.md", SCHEMA, 0o644),
         file("spec/examples/digest.md", DIGEST_SPEC, 0o644),
@@ -90,6 +106,7 @@ fn templates() -> Vec<TemplateFile> {
         file("bin/lightsout", LIGHTSOUT_LAUNCHER, 0o755),
         file("bin/job", JOB_LAUNCHER, 0o755),
         file("bin/report", REPORT_LAUNCHER, 0o755),
+        file("triage.conf", TRIAGE_CONF, 0o644),
         TemplateFile {
             rel: ".gitignore",
             body: GITIGNORE.to_string(),
@@ -341,6 +358,8 @@ pub fn doctor(root: &Path) -> i32 {
         "lib/agent.sh",
         "lib/memory.sh",
         "lib/repairs.sh",
+        "lib/heal.sh",
+        "lib/prompts/repair.md",
     ] {
         require_file(root, rel, &mut errors);
     }
@@ -353,6 +372,29 @@ pub fn doctor(root: &Path) -> i32 {
                     ok("triage.conf");
                     for message in policy.warnings(root) {
                         warning(&mut warnings, &message);
+                    }
+                    if policy.has_agent() {
+                        let runner = env::var("U_HEAL_RUNNER")
+                            .ok()
+                            .filter(|value| !value.is_empty())
+                            .or_else(|| env::var("U_RUNNER").ok().filter(|value| !value.is_empty()))
+                            .unwrap_or_else(|| "dsh".into());
+                        if which(&runner).is_some() {
+                            ok(&format!("agent runner {runner}"));
+                        } else {
+                            warning(
+                                &mut warnings,
+                                &format!(
+                                    "agent runner '{runner}' is not installed; heal and auto-repair will fail"
+                                ),
+                            );
+                        }
+                        warning(
+                            &mut warnings,
+                            &format!(
+                                "containment: tripwire only for runner {runner}; adapter-level read-only is not implemented"
+                            ),
+                        );
                     }
                 }
                 Err(error) => fail(&mut errors, &format!("triage.conf: {error}")),
@@ -391,6 +433,7 @@ pub fn doctor(root: &Path) -> i32 {
             let job = jobs_dir.join(&name).join("job.sh");
             if job.is_file() {
                 ok(&format!("jobs/{name}/job.sh"));
+                check_repair_allow(root, &name, &mut errors);
                 job_bodies.push((name, state::read_lossy(&job)));
             } else {
                 warning(&mut warnings, &format!("jobs/{name}/ has no job.sh"));
@@ -488,6 +531,46 @@ fn parse_marker(body: &str) -> Option<(u32, Option<String>)> {
         }
     }
     schema.map(|schema| (schema, manager))
+}
+
+fn check_repair_allow(root: &Path, job: &str, errors: &mut usize) {
+    let path = root.join("jobs").join(job).join("repair.allow");
+    if !path.is_file() {
+        return;
+    }
+    let body = state::read_lossy(&path);
+    let mut bad = 0usize;
+    for (index, line) in body.lines().enumerate() {
+        let text = line.split('#').next().unwrap_or("").trim();
+        if text.is_empty() {
+            continue;
+        }
+        let prefix = Path::new(text);
+        let escapes = prefix.is_absolute()
+            || text.contains('\\')
+            || prefix.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                        | std::path::Component::CurDir
+                )
+            });
+        if escapes {
+            bad += 1;
+            fail(
+                errors,
+                &format!(
+                    "jobs/{job}/repair.allow:{}: prefix must stay inside jobs/{job}/",
+                    index + 1
+                ),
+            );
+        }
+    }
+    if bad == 0 {
+        ok(&format!("jobs/{job}/repair.allow"));
+    }
 }
 
 fn require_file(root: &Path, rel: &str, errors: &mut usize) {

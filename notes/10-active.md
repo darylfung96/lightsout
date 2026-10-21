@@ -24,9 +24,11 @@ Next, in order:
 
 1. One supervised run: `bin/job run everyday-laws` by hand, comparing the master
    to the previous night's before trusting it overnight.
-2. Only then point the launchd plist at `bin/job run everyday-laws` and retire
-   the old launcher.
-3. Decide whether `bin/job check` (the stale alarm) becomes a launchd timer, so
+2. Then `lightsout triage everyday-laws` and one `lightsout heal everyday-laws`
+   by hand, so the proposal, the validator and the gate are seen together.
+3. Only then point the launchd plist at `bin/job run everyday-laws
+   --auto-repair` and retire the old launcher.
+4. Decide whether `bin/job check` (the stale alarm) becomes a launchd timer, so
    a night with no run announces itself.
 
 ## Distribution
@@ -45,12 +47,32 @@ workspace lifecycle tests, both 261-check suites remain green, and
 `tests/install.sh` passes against a local fake release, including a
 tampered-asset refusal and an out-of-band pinned hash.
 
+## Auto-repair
+
+Bounded auto-repair is implemented as of 2026-10-21. `triage.conf` routes a
+blocked job to `human`, a deterministic `repair:<name>`, `agent:propose` or
+`agent:apply`; the manager adds `triage` (read-only decision), `heal` (one
+attempt, with `--apply` and `--revert N`) and `run --auto-repair`. An agent
+proposal is validated against `repair.allow` (default `out/`), applied
+atomically with a backup, and re-checked by the same gate; the same failure key
+after an attempt stops the loop. Caps are `MAX_HEALS` (2 per job per day),
+`MAX_HEALS_TOTAL` (5 per workspace per day), `MAX_AUTO_ATTEMPTS` (3 per
+invocation) and `U_AGENT_TIMEOUT` (600 s). Read `docs/auto-repair.md` for the prompt contract and the failure
+verdicts, because this page only records the state.
+
+Verified 2026-10-21: `cargo test` passes with 36 auto-repair tests, the 261
+ported checks, the workspace tests and the shell suite; `tests/install.sh`
+remains green. Keep the first real use supervised by running `triage` and one `heal` by
+hand on `everyday-laws`, because a proposal and a gate have not been seen
+together until they run on the real job; only then add `--auto-repair` to
+launchd.
+
 ## Port shape
 
 - `bin/job` and `bin/report` are launchers that find the built binary;
   `bin/lightsout` is the built artifact and is gitignored.
 - `lightsout` owns `list`, `status`, `report`, `check`, `plan`, `diagnose`,
-  `run`, `resume`, `retry`, `unblock` and `gate`.
+  `run`, `resume`, `retry`, `triage`, `heal`, `unblock` and `gate`.
 - `lib/guards.sh` and `lib/memory.sh` call `$LIGHTSOUT_BIN gate`, so a job and
   the manager run the same gate implementation.
 - `tests/tasks_01_12.rs` and `tests/tasks_13_23.rs` group the ported checks by

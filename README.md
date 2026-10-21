@@ -19,6 +19,9 @@ This repository builds them once.
   until implemented. `lightsout gate`
 - **An agent step** — prompt file, headless run, contract gate, staged output,
   never retried. `docs/agent-step.md`
+- **Bounded auto-repair** — `triage.conf` routes a blocked job to a
+  deterministic repair, an agent proposal, an agent apply, or a human; caps,
+  validation and backups bound the attempt. `docs/auto-repair.md`
 - **A memory pass** — the last stage of every job, so an unattended agent obeys
   the same replace-never-append rules a session does. `docs/memory-pass.md`
 - **Visibility** — `bin/report` renders every job's state from its state files.
@@ -58,7 +61,8 @@ lib/          the shell job libraries: guards, locks, notify, agent, memory, rep
 bin/          job and report launchers, plus scaffold
 jobs/<name>/  one directory per automation: job.sh, spec.md, state/, logs/, out/
 spec/         the intent format, plus examples
-tests/        the 261 contract checks, workspace tests and installer test
+triage.conf   the workspace auto-repair policy
+tests/        the 261 contract checks, auto-repair tests and workspace tests
 packaging/    Homebrew formula and macOS signing helper
 install.sh    checksum-verifying release installer
 lightsout.toml  this repository's workspace marker
@@ -74,7 +78,7 @@ safely when something is wrong.
 ## Tests
 
 ```sh
-cargo test      # 261 ported checks plus the workspace lifecycle tests (macOS)
+cargo test      # 261 ported checks, auto-repair tests and workspace tests (macOS)
 tests/run.sh    # the same 261 checks through the shell jobs and the binary
 tests/install.sh  # installer checks against a local fake release (portable)
 ```

@@ -100,12 +100,16 @@ fn init_creates_a_runnable_workspace() {
     assert_eq!(code(&output), 0, "{}", text(&output));
     assert!(office.join("lightsout.toml").is_file());
     assert!(office.join("lib/guards.sh").is_file());
+    assert!(office.join("lib/heal.sh").is_file());
+    assert!(office.join("lib/prompts/repair.md").is_file());
+    assert!(office.join("triage.conf").is_file());
     assert!(office.join("jobs/noop/job.sh").is_file());
     assert!(office.join("bin/scaffold").is_file());
 
     let doctor = run(&office, &["doctor"]);
     assert_eq!(code(&doctor), 0, "{}", text(&doctor));
     assert!(text(&doctor).contains("marker schema 1"));
+    assert!(text(&doctor).contains("triage.conf"));
 
     let run_noop = run(&office, &["run", "noop"]);
     assert_eq!(code(&run_noop), 0, "{}", text(&run_noop));
@@ -216,4 +220,36 @@ fn version_and_unknown_workspace() {
     );
     assert_eq!(code(&status), 64, "{}", text(&status));
     assert!(text(&status).contains("not a LightsOut workspace"));
+}
+
+#[test]
+fn doctor_reports_agent_policy_containment() {
+    let temp = Temp::new("doctor-agent");
+    let office = temp.join("office");
+    assert_eq!(
+        code(&run(temp.path(), &["init", office.to_str().unwrap()])),
+        0
+    );
+    fs::write(office.join("triage.conf"), "noop * agent:apply\n").unwrap();
+    let doctor = run(&office, &["doctor"]);
+    assert_eq!(code(&doctor), 0, "{}", text(&doctor));
+    assert!(
+        text(&doctor).contains("containment: tripwire only"),
+        "{}",
+        text(&doctor)
+    );
+}
+
+#[test]
+fn doctor_rejects_an_escaping_repair_allow() {
+    let temp = Temp::new("doctor-allow");
+    let office = temp.join("office");
+    assert_eq!(
+        code(&run(temp.path(), &["init", office.to_str().unwrap()])),
+        0
+    );
+    fs::write(office.join("jobs/noop/repair.allow"), "../escape\n").unwrap();
+    let doctor = run(&office, &["doctor"]);
+    assert_eq!(code(&doctor), 1, "{}", text(&doctor));
+    assert!(text(&doctor).contains("repair.allow"), "{}", text(&doctor));
 }

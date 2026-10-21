@@ -93,8 +93,9 @@ lightsout run noop
 
 ```text
 lightsout.toml
-lib/            guards, locks, notify, agent, memory, repairs
+lib/            guards, locks, notify, agent, memory, repairs, heal, prompts/
 jobs/noop/      the smallest complete fixture
+triage.conf     the auto-repair policy; all human by default
 spec/           schema and a digest example
 bin/            scaffold, job, report and lightsout launchers
 .gitignore      state and output exclusions

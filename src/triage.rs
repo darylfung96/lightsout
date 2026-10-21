@@ -166,6 +166,10 @@ impl Policy {
         self.present
     }
 
+    pub fn has_agent(&self) -> bool {
+        self.rules.iter().any(|rule| rule.action.is_agent())
+    }
+
     pub fn origin(&self) -> &str {
         &self.origin
     }

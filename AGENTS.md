@@ -17,6 +17,11 @@ letting any job write notes.
 - **Scripts before agents.** Anything checkable becomes a gate, not a sentence
   in a prompt. See `~/pi-memory/shared/deterministic-first.md`.
 - **An agent step is staged, gated, and never retried.** See `docs/agent-step.md`.
+- **Auto-repair edits artifacts, never the checklist.** An agent proposal is
+  data: the validator refuses `job.sh`, `spec.md`, `state/` and `lib/`, the
+  manager applies edits atomically with a backup, and only the job's gate may
+  pass a gate. `triage.conf` is human-edited; the manager never learns a rule.
+  See `docs/auto-repair.md`.
 - **No secrets in the repo.** Reference a keyring or an env file outside it.
 
 ## Memory (full durable-memory suite)

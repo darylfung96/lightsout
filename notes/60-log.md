@@ -69,3 +69,22 @@ publish attempt exposed a missing checkout in the release job. Verified
 2026-10-21: the release workflow passed, a public install from the release URL
 verified its checksum, initialized a workspace, passed `doctor` and ran `noop`,
 and the Homebrew formula passed `brew audit --strict --online`.
+
+
+## [2026-10-21] decision | bounded auto-repair lands behind a policy and caps
+
+Implemented the plan at `docs/superpowers/plans/2026-10-21-auto-repair.md`
+through the feature tasks: `triage.conf` plus a read-only `triage` verb,
+`heal` propose/apply/revert, `run --auto-repair`, the JSON proposal validator,
+atomic apply with backups, the progress check, and the workspace heal budget.
+The manager never learns a rule, because the policy is human-edited; the
+validator refuses `job.sh`, `spec.md`, `state/` and `lib/`, and the same failure
+key after an attempt stops the loop, so a fix that does not move the failure
+cannot spend the next attempt.
+The owner chose `agent:apply` as the default, so `agent:propose` is the
+approval opt-in.
+
+Verified 2026-10-21: `cargo test` passes with 36 auto-repair tests, the 261
+ported checks, the workspace tests and the shell suite; `tests/install.sh` and
+`cargo clippy` are clean. Still open: Task 7 documentation, Task 8's 0.2.0
+release, and the first supervised `heal` on `everyday-laws`.

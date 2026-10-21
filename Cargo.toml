@@ -18,6 +18,8 @@ include = [
     "README.md",
     "src/**/*",
     "lib/*.sh",
+    "lib/prompts/**/*",
+    "triage.conf",
     "jobs/noop/job.sh",
     "jobs/everyday-laws/**/*",
     "notes/**/*",

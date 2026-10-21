@@ -44,3 +44,19 @@ independently of the job state; `--workspace` and `LIGHTSOUT_REPO` select a
 workspace explicitly for commands that run outside it. Verified 2026-10-21:
 `init`, `doctor`, the workspace launchers and the installer pass their tests,
 and both 261-check suites remain green.
+
+## D7 — Auto-repair is bounded and routed by a human policy
+
+A blocked job may be repaired by the manager, because the state files already
+name the failure class and the source, and a small set of failures is
+environmental. `triage.conf` maps `(job, source)` to `human`, a deterministic
+repair, an agent proposal, or an agent apply; a human edits the file and the
+manager never learns a rule. An agent attempt returns a JSON proposal of file
+edits, the validator refuses every path outside the job's allowlist and every
+path that judges the work, and the manager applies the batch atomically with a
+backup so `heal --revert` can restore it. The same failure key after an attempt
+stops the loop, because a fix that does not move the failure is not progress;
+per-job and per-workspace caps bound the bill. The owner chose `agent:apply` as
+the default; `agent:propose` remains for a source that needs approval. The gate
+still decides, because the proposal is input and no agent can mark a gate
+passed.
