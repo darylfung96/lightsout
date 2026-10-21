@@ -27,7 +27,7 @@ This repository builds them once.
 
 ```sh
 brew install darylfung96/lightsout/lightsout
-# or: curl -fsSL https://github.com/darylfung96/lightsout/releases/download/v0.1.0/install.sh -o /tmp/lightsout-install.sh && sh /tmp/lightsout-install.sh
+# or use the checksum-verified release installer in docs/install.md
 lightsout init ~/my-office         # write a versioned workspace
 cd ~/my-office
 lightsout doctor                   # check the workspace and its tools
