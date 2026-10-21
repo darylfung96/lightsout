@@ -236,3 +236,174 @@ fn triage_failure_key_derives_a_gate_from_the_reason() {
         Some("gate:duration")
     );
 }
+
+fn ready_job(s: &Sandbox, always_block: bool) {
+    let body = if always_block {
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+. "$REPO/lib/guards.sh"
+u_block --class retryable --source gate:ready "ready marker missing"
+"#
+    } else {
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+. "$REPO/lib/guards.sh"
+if [ ! -f "$OUT/ready" ]; then
+  u_block --class retryable --source gate:ready "ready marker missing"
+fi
+u_done
+"#
+    };
+    s.write("jobs/ready/job.sh", body);
+}
+
+fn add_repair(s: &Sandbox, name: &str, body: &str) {
+    s.append(
+        "lib/repairs.sh",
+        &format!("\nrepair_{name}() {{\n{body}\n}}\n"),
+    );
+}
+
+fn attempt_dir(s: &Sandbox) -> String {
+    format!("jobs/ready/state/heal/{}/attempt-1", s.today())
+}
+
+#[test]
+fn auto_repair_repairs_and_reruns_to_done() {
+    let s = Sandbox::new("ar-auto-pass");
+    ready_job(&s, false);
+    add_repair(
+        &s,
+        "make-ready",
+        "  mkdir -p \"$OUT\"\n  : > \"$OUT/ready\"",
+    );
+    s.write("triage.conf", "ready gate:ready repair:make-ready\n");
+
+    let out = s.run(&["run", "ready", "--auto-repair"]);
+    assert_eq!(code(&out), 0, "auto repair passes: {}", combined(&out));
+    assert!(!s.exists("jobs/ready/state/blocked"), "block cleared");
+    assert!(s.is_file("jobs/ready/out/ready"), "repair artifact written");
+
+    let history = s.read("jobs/ready/state/heal/history.tsv");
+    assert_eq!(
+        history.lines().count(),
+        1,
+        "one attempt recorded: {history}"
+    );
+    assert!(history.contains("passed"), "attempt verdict: {history}");
+    assert_eq!(
+        s.read(&format!("jobs/ready/state/repairs/{}.count", s.today()))
+            .trim(),
+        "1",
+        "one repair counted"
+    );
+    assert!(
+        s.read(&format!("{}/verdict", attempt_dir(&s)))
+            .contains("passed"),
+        "attempt verdict file"
+    );
+}
+
+#[test]
+fn auto_repair_stops_when_the_same_failure_returns() {
+    let s = Sandbox::new("ar-auto-noprogress");
+    ready_job(&s, true);
+    add_repair(&s, "do-nothing", "  :");
+    s.write("triage.conf", "ready gate:ready repair:do-nothing\n");
+
+    let out = s.run(&["run", "ready", "--auto-repair"]);
+    assert_eq!(code(&out), 2, "same failure stops: {}", combined(&out));
+    assert!(s.is_file("jobs/ready/state/blocked"), "block remains");
+    let history = s.read("jobs/ready/state/heal/history.tsv");
+    assert_eq!(history.lines().count(), 1, "one attempt only: {history}");
+    assert!(
+        history.contains("no-progress"),
+        "verdict is no-progress: {history}"
+    );
+    assert_eq!(
+        s.read(&format!("jobs/ready/state/repairs/{}.count", s.today()))
+            .trim(),
+        "1",
+        "the repair ran once"
+    );
+}
+
+#[test]
+fn auto_repair_leaves_a_human_block_alone() {
+    let s = Sandbox::new("ar-auto-human");
+    ready_job(&s, true);
+    let out = s.run(&["run", "ready", "--auto-repair"]);
+    assert_eq!(code(&out), 2, "human block exits 2");
+    assert!(s.is_file("jobs/ready/state/blocked"));
+    assert!(
+        !s.exists("jobs/ready/state/heal/history.tsv"),
+        "no attempt for a human block"
+    );
+}
+
+#[test]
+fn auto_repair_is_held_by_a_live_lock() {
+    let s = Sandbox::new("ar-auto-lock");
+    ready_job(&s, false);
+    s.mkdir("jobs/ready/state/heal/lock");
+    s.write("jobs/ready/state/heal/lock/pid", "999\n");
+    s.write(
+        "jobs/ready/state/heal/lock/expiry",
+        &format!("{}\n", s.now_epoch() + 60),
+    );
+
+    let out = s.run(&["run", "ready", "--auto-repair"]);
+    assert_eq!(code(&out), 0, "held lock exits 0");
+    assert!(combined(&out).contains("held"), "held is reported");
+    assert!(!s.exists("jobs/ready/state/heal/history.tsv"));
+}
+
+#[test]
+fn auto_repair_environment_enables_the_loop() {
+    let s = Sandbox::new("ar-auto-env");
+    ready_job(&s, false);
+    add_repair(
+        &s,
+        "make-ready",
+        "  mkdir -p \"$OUT\"\n  : > \"$OUT/ready\"",
+    );
+    s.write("triage.conf", "ready gate:ready repair:make-ready\n");
+
+    let out = s.run_env(&["run", "ready"], &[("LIGHTSOUT_AUTO_REPAIR", "1")]);
+    assert_eq!(code(&out), 0, "env enables auto repair: {}", combined(&out));
+    assert!(s.is_file("jobs/ready/out/ready"));
+}
+
+#[test]
+fn auto_repair_reports_the_repair_cap() {
+    let s = Sandbox::new("ar-auto-repair-cap");
+    ready_job(&s, true);
+    add_repair(&s, "do-nothing", "  :");
+    s.write("triage.conf", "ready gate:ready repair:do-nothing\n");
+
+    let out = s.run_env(&["run", "ready", "--auto-repair"], &[("MAX_REPAIRS", "0")]);
+    assert_eq!(code(&out), 2, "cap exits 2");
+    assert!(combined(&out).contains("repair cap"), "cap is reported");
+    let history = s.read("jobs/ready/state/heal/history.tsv");
+    assert!(history.contains("refused"), "refused attempt recorded");
+}
+
+#[test]
+fn plain_run_does_not_repair() {
+    let s = Sandbox::new("ar-plain-run");
+    ready_job(&s, false);
+    add_repair(
+        &s,
+        "make-ready",
+        "  mkdir -p \"$OUT\"\n  : > \"$OUT/ready\"",
+    );
+    s.write("triage.conf", "ready gate:ready repair:make-ready\n");
+
+    let out = s.run(&["run", "ready"]);
+    assert_eq!(code(&out), 2, "plain run stops at the block");
+    assert!(
+        !s.is_file("jobs/ready/out/ready"),
+        "no repair without opt-in"
+    );
+    assert!(!s.exists("jobs/ready/state/heal/history.tsv"));
+}

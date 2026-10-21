@@ -5,6 +5,7 @@ mod clock;
 mod commands;
 mod diagnose;
 mod gates;
+mod heal;
 mod repo;
 mod state;
 mod status;
@@ -138,10 +139,12 @@ fn run_verb(verb: &str, argv: &[String]) -> i32 {
     };
     let mut class: Option<String> = None;
     let mut source: Option<String> = None;
+    let mut auto = std::env::var("LIGHTSOUT_AUTO_REPAIR").ok().as_deref() == Some("1");
     let mut i = 1;
     while i < argv.len() {
         let arg = &argv[i];
         match arg.as_str() {
+            "--auto-repair" => auto = true,
             "--class" => {
                 let Some(value) = argv.get(i + 1) else {
                     eprintln!("--class needs a value");
@@ -189,6 +192,7 @@ fn run_verb(verb: &str, argv: &[String]) -> i32 {
             if verb == "resume" { "resume" } else { "run" },
             class.as_deref(),
             source.as_deref(),
+            auto,
         )
     })
 }

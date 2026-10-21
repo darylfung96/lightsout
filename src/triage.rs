@@ -341,7 +341,12 @@ pub fn heal_count(state: &Path) -> usize {
     };
     entries
         .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with("attempt-"))
+        .filter(|entry| {
+            entry.file_name().to_string_lossy().starts_with("attempt-")
+                && state::read_lossy(&entry.path().join("meta.env"))
+                    .lines()
+                    .any(|line| line.starts_with("action=agent"))
+        })
         .count()
 }
 

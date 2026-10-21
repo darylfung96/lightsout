@@ -11,8 +11,10 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::clock;
+use crate::heal;
 use crate::repo::Paths;
 use crate::state;
+use crate::triage;
 
 pub const USAGE: &str = "usage: lightsout [--workspace DIR] <verb> [name]
 
@@ -27,9 +29,11 @@ pub const USAGE: &str = "usage: lightsout [--workspace DIR] <verb> [name]
   plan <name>          what would run now; touches nothing
   diagnose <name>      read-only report on the current stop; writes
                        state/diagnosis.md and exits 0 even when blocked
-  run <name> [--class C] [--source S]
+  run <name> [--class C] [--source S] [--auto-repair]
                        do the work, resuming from disk; C defaults every block
-                       raised in this run (retryable|judgment|human)
+                       raised in this run (retryable|judgment|human);
+                       --auto-repair routes a block through triage.conf and
+                       makes bounded attempts (also LIGHTSOUT_AUTO_REPAIR=1)
   retry <name> [--repair R]
                        run the allowlisted repair R (default touch-missing)
                        for a retryable block, then the job again so the same
@@ -234,7 +238,17 @@ pub fn plan(repo: &Path, name: &str) -> i32 {
     run_job(repo, name, "plan", true, None, None, false)
 }
 
-pub fn run(repo: &Path, name: &str, verb: &str, class: Option<&str>, source: Option<&str>) -> i32 {
+pub fn run(
+    repo: &Path,
+    name: &str,
+    verb: &str,
+    class: Option<&str>,
+    source: Option<&str>,
+    auto: bool,
+) -> i32 {
+    if auto {
+        return run_auto(repo, name, class, source);
+    }
     run_job(repo, name, verb, false, class, source, false)
 }
 
@@ -432,13 +446,21 @@ pub fn retry(repo: &Path, argv: &[String]) -> i32 {
         return 2;
     }
 
+    if let Err(code) = run_repair(&paths, &repair) {
+        return code;
+    }
+
+    run_job(repo, &paths.name, "retry", false, None, None, true)
+}
+
+fn run_repair(paths: &Paths, repair: &str) -> Result<(), i32> {
     let repairs_path = paths.repo.join("lib").join("repairs.sh");
     if !repairs_path.is_file() {
         eprintln!("refusing to retry: no repair registry at lib/repairs.sh");
-        return 2;
+        return Err(2);
     }
-    let allowed = registered_repairs(repo);
-    if !allowed.iter().any(|candidate| candidate == &repair) {
+    let allowed = registered_repairs(&paths.repo);
+    if !allowed.iter().any(|candidate| candidate.as_str() == repair) {
         println!("refusing unknown repair: {repair}");
         println!(
             "  allowlisted: {}",
@@ -448,7 +470,7 @@ pub fn retry(repo: &Path, argv: &[String]) -> i32 {
                 allowed.join(" ")
             }
         );
-        return 2;
+        return Err(2);
     }
 
     let max = env::var("MAX_REPAIRS")
@@ -457,7 +479,7 @@ pub fn retry(repo: &Path, argv: &[String]) -> i32 {
         .unwrap_or_else(|| "2".into());
     if max.is_empty() || !max.chars().all(|c| c.is_ascii_digit()) {
         eprintln!("MAX_REPAIRS must be a whole number");
-        return 64;
+        return Err(64);
     }
     let max: i64 = max.parse().unwrap_or(2);
     let count_path = paths
@@ -479,7 +501,7 @@ pub fn retry(repo: &Path, argv: &[String]) -> i32 {
             "  the next repair needs a human: bin/job diagnose {}",
             paths.name
         );
-        return 2;
+        return Err(2);
     }
 
     let _ = fs::create_dir_all(paths.state.join("repairs"));
@@ -494,7 +516,7 @@ pub fn retry(repo: &Path, argv: &[String]) -> i32 {
     cmd.arg("-c")
         .arg(r#"set -euo pipefail; . "$REPO/lib/repairs.sh"; "repair_$1""#)
         .arg("lightsout")
-        .arg(&repair);
+        .arg(repair);
     cmd.env("REPO", &paths.repo)
         .env("JOB", &paths.name)
         .env("JOB_DIR", &paths.dir)
@@ -510,7 +532,7 @@ pub fn retry(repo: &Path, argv: &[String]) -> i32 {
             &paths.log,
             &format!("retry: repair {repair} failed; the block stands"),
         );
-        return 1;
+        return Err(1);
     }
     say(
         &paths.log,
@@ -519,8 +541,177 @@ pub fn retry(repo: &Path, argv: &[String]) -> i32 {
             paths.name
         ),
     );
+    Ok(())
+}
 
-    run_job(repo, &paths.name, "retry", false, None, None, true)
+pub fn run_auto(repo: &Path, name: &str, class: Option<&str>, source: Option<&str>) -> i32 {
+    if !repo.join("jobs").join(name).join("job.sh").is_file() {
+        eprintln!("no such job: {name}");
+        return 64;
+    }
+    let paths = job_env(repo, name);
+
+    let lock = match heal::Lock::acquire(&paths.state) {
+        heal::LockResult::Acquired(lock) => lock,
+        heal::LockResult::Held { pid, expiry } => {
+            println!(
+                "held: auto-repair lock is held by pid {pid} until {}",
+                clock::iso(expiry)
+            );
+            return 0;
+        }
+        heal::LockResult::Failed(error) => {
+            eprintln!("auto-repair: {error}");
+            return 2;
+        }
+    };
+
+    let max_attempts = match heal::max_auto_attempts() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("{error}");
+            return 64;
+        }
+    };
+    let policy_file = triage::policy_path(repo);
+    let policy = match triage::Policy::load(&policy_file) {
+        Ok(policy) => policy,
+        Err(error) => {
+            eprintln!("{}: {error}", policy_file.display());
+            return 64;
+        }
+    };
+    if let Err(error) = policy.check_repairs(repo) {
+        eprintln!("{}: {error}", policy_file.display());
+        return 64;
+    }
+
+    let blocked_path = paths.state.join("blocked");
+    if let Some(blocked) = state::blocked_marker(&blocked_path) {
+        let day = blocked.iso.get(..10).unwrap_or("");
+        if day != clock::today() {
+            println!("block dated {day}; use: lightsout heal {name}");
+            return 2;
+        }
+        return heal_loop(repo, &paths, &policy, blocked, max_attempts, &lock);
+    }
+
+    let rc = run_job(repo, name, "run", false, class, source, false);
+    if rc != 2 {
+        return rc;
+    }
+    let Some(blocked) = state::blocked_marker(&blocked_path) else {
+        return 2;
+    };
+    heal_loop(repo, &paths, &policy, blocked, max_attempts, &lock)
+}
+
+fn heal_loop(
+    repo: &Path,
+    paths: &Paths,
+    policy: &triage::Policy,
+    mut blocked: state::Blocked,
+    max_attempts: usize,
+    lock: &heal::Lock,
+) -> i32 {
+    let mut attempts = 0usize;
+    loop {
+        if attempts >= max_attempts {
+            println!(
+                "auto-repair: attempt cap reached ({attempts} of {max_attempts}) for {}",
+                paths.name
+            );
+            return 2;
+        }
+        let decision = triage::decide(policy, &paths.name, &blocked);
+        let before_key = triage::failure_key(&blocked);
+        match decision.action {
+            triage::Action::Human => {
+                println!(
+                    "auto-repair: {} is left for a human ({})",
+                    paths.name,
+                    decision
+                        .note
+                        .unwrap_or_else(|| "no rule matched".to_string())
+                );
+                return 2;
+            }
+            triage::Action::Repair(repair) => {
+                let attempt = match heal::begin_attempt(paths) {
+                    Ok(attempt) => attempt,
+                    Err(error) => {
+                        eprintln!("auto-repair: {error}");
+                        return 2;
+                    }
+                };
+                lock.refresh();
+                let action = format!("repair:{repair}");
+                if let Err(code) = run_repair(paths, &repair) {
+                    heal::record_attempt(
+                        paths,
+                        &attempt,
+                        &heal::Record {
+                            action: &action,
+                            before_key: &before_key,
+                            after_key: &before_key,
+                            verdict: "refused",
+                            rc: code,
+                            cost: None,
+                        },
+                    );
+                    return code;
+                }
+                attempts += 1;
+                let rc = run_job(repo, &paths.name, "run", false, None, None, true);
+                let next = state::blocked_marker(&paths.state.join("blocked"));
+                let after_key = next
+                    .as_ref()
+                    .map(triage::failure_key)
+                    .unwrap_or_else(|| "done".to_string());
+                let verdict = if rc == 2 && after_key == before_key {
+                    "no-progress"
+                } else if rc == 0 {
+                    "passed"
+                } else {
+                    "repaired"
+                };
+                heal::record_attempt(
+                    paths,
+                    &attempt,
+                    &heal::Record {
+                        action: &action,
+                        before_key: &before_key,
+                        after_key: &after_key,
+                        verdict,
+                        rc,
+                        cost: None,
+                    },
+                );
+                if rc != 2 {
+                    return rc;
+                }
+                if after_key == before_key {
+                    println!(
+                        "auto-repair: {} failed the same way after the repair; stopping",
+                        paths.name
+                    );
+                    return 2;
+                }
+                blocked = match next {
+                    Some(next) => next,
+                    None => return 2,
+                };
+                continue;
+            }
+            triage::Action::AgentPropose | triage::Action::AgentApply => {
+                println!(
+                    "auto-repair: agent actions are not enabled yet; leaving {} for a human",
+                    paths.name
+                );
+                return 2;
+            }
+        }
+    }
 }
 
 pub fn unblock(repo: &Path, name: &str) -> i32 {
