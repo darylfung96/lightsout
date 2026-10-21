@@ -88,3 +88,20 @@ Verified 2026-10-21: `cargo test` passes with 36 auto-repair tests, the 261
 ported checks, the workspace tests and the shell suite; `tests/install.sh` and
 `cargo clippy` are clean. Still open: Task 7 documentation, Task 8's 0.2.0
 release, and the first supervised `heal` on `everyday-laws`.
+
+
+## [2026-10-21] release | v0.2.0 publishes bounded auto-repair
+
+Merged `feat/auto-repair` into `main` and tagged `v0.2.0` at `4558957`. The
+release workflow built the four targets, published checksums plus `install.sh`,
+and finished successfully; the four archives and the installer verified
+locally, and the public `install.sh` initialized a workspace, passed `doctor`
+with 0 warnings, ran `noop`, and printed the triage decision. The formula now
+points at `v0.2.0` with sha256
+`beda93b475aa33af7e262c2864d0c29cf082588498407cc78fdc7093986136cd`; the tap
+copy matches and `brew audit --strict --online` passes.
+
+The release also carries the migration from `~/pi-memory` to
+`~/agent-memory`, because the store moved while the feature was in flight. Keep
+the first real `heal` on `everyday-laws` supervised, because the release was
+exercised with the fake runner and the installer, not with a live video build.

@@ -62,10 +62,14 @@ verdicts, because this page only records the state.
 
 Verified 2026-10-21: `cargo test` passes with 36 auto-repair tests, the 261
 ported checks, the workspace tests and the shell suite; `tests/install.sh`
-remains green. Keep the first real use supervised by running `triage` and one `heal` by
-hand on `everyday-laws`, because a proposal and a gate have not been seen
-together until they run on the real job; only then add `--auto-repair` to
-launchd.
+remains green. v0.2.0 is published at
+`https://github.com/darylfung96/lightsout/releases/tag/v0.2.0`, the four
+archive checksums and `install.sh` were verified, the public installer
+initialized a workspace and ran `noop`, and the Homebrew formula at 0.2.0
+passes `brew audit --strict --online`. Keep the first real use supervised by
+running `triage` and one `heal` by hand on `everyday-laws`, because a proposal
+and a gate have not been seen together until they run on the real job; only
+then add `--auto-repair` to launchd.
 
 ## Port shape
 
