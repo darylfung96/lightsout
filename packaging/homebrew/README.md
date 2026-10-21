@@ -1,4 +1,9 @@
-# Homebrew tap template
+# Homebrew tap
+
+The live tap is
+[`darylfung96/homebrew-lightsout`](https://github.com/darylfung96/homebrew-lightsout).
+This directory is the source copy of the formula; the tap copy carries the
+same `url` and `sha256`.
 
 A live tap needs a real checksum, because Homebrew refuses a formula whose
 `sha256` does not match its `url`; after tagging a release, copy

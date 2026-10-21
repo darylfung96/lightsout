@@ -57,3 +57,15 @@ source so the macOS tap avoids a quarantined binary. Verified 2026-10-21: the
 new `tests/workspace_cli.rs` passes 7 tests, `tests/install.sh` passes 11 checks
 including a tampered-asset refusal and an out-of-band hash pin, and the 261-check cargo and shell suites
 remain green.
+
+## [2026-10-21] decision | v0.1.0 is published, with a public installer and tap
+
+The repository is public at `darylfung96/lightsout`, because the anonymous
+`curl` installer and the Homebrew tap need unauthenticated release assets. The
+tag `v0.1.0` built four targets, published checksums plus the installer and its
+checksum, and the tap lives at `darylfung96/homebrew-lightsout`; the formula
+builds from the tag tarball and its checksum was pinned after the first
+publish attempt exposed a missing checkout in the release job. Verified
+2026-10-21: the release workflow passed, a public install from the release URL
+verified its checksum, initialized a workspace, passed `doctor` and ran `noop`,
+and the Homebrew formula passed `brew audit --strict --online`.

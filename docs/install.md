@@ -67,7 +67,7 @@ trusting a checksum fetched from the same release.
 
 ### Homebrew
 
-Once the tap is published:
+From the published tap:
 
 ```sh
 brew install darylfung96/lightsout/lightsout
