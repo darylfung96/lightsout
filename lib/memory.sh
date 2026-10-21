@@ -1,10 +1,10 @@
 # memory.sh — the durable-memory pass as a job stage.
-# Rules: ~/pi-memory/shared/memory-update-policy.md, wiki-policy.md.
+# Rules: ~/agent-memory/shared/memory-update-policy.md, wiki-policy.md.
 # qmd needs file access outside the workspace sandbox; run jobs unsandboxed.
 # Set U_MEMORY=1 to enable, U_MEMORY_FILES="notes/a.md notes/b.md" to name what changed.
 # U_PI_MEMORY names the store; tests point it at tests/fake-pi-memory.
 
-export U_PI_MEMORY="${U_PI_MEMORY:-$HOME/pi-memory}"
+export U_PI_MEMORY="${U_PI_MEMORY:-$HOME/agent-memory}"
 
 # u_memory_check — the whole pass as one gate: save each named note, lint the
 # store, then prove the receipt, and fail when any step does (lightsout gate

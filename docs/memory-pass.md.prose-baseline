@@ -1,0 +1,3 @@
+# accepted legacy flags for prose-lint; one id per line
+052085457239  # An unattended agent writing notes is still bound by the durable-memory rules: `~/agent-mem
+87202675056d  # A job that publishes a video and then silently leaves memory stale has produced two artifa

@@ -561,9 +561,9 @@ fn memory(opts: &Opts) -> (bool, String) {
             std::env::var("HOME")
                 .ok()
                 .filter(|h| !h.is_empty())
-                .map(|home| format!("{home}/pi-memory"))
+                .map(|home| format!("{home}/agent-memory"))
         })
-        .unwrap_or_else(|| "/nonexistent/pi-memory".into());
+        .unwrap_or_else(|| "/nonexistent/agent-memory".into());
     let mut steps = Vec::new();
     for name in opts
         .files

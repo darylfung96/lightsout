@@ -6,7 +6,7 @@
 
 **Architecture:** Three additions on top of the existing six verbs: a failure *class* recorded in `state/blocked` (retryable | judgment | human), a read-only `diagnose` verb that writes `state/diagnosis.md`, and an allowlisted `retry` verb that may only run repairs, never pass a gate. Everything else is accounting and visibility layered on the same files: a run ledger, a spend ledger, per-stage attempt caps, resource locks, stale-run detection, and a memory gate. No database, no server, no new dependency.
 
-**Tech Stack:** bash 3.2 (macOS system shell), Python 3 stdlib (`lib/gates.py`, `lib/report.py`), launchd/cron as the external clock (unchanged), `~/pi-memory` CLI as the memory store.
+**Tech Stack:** bash 3.2 (macOS system shell), Python 3 stdlib (`lib/gates.py`, `lib/report.py`), launchd/cron as the external clock (unchanged), `~/agent-memory` CLI as the memory store.
 
 **Spec:** `docs/design.md` (why), `docs/run-contract.md` (the interface), `docs/memory-pass.md` (the memory rules). The gap list this plan closes is the "Gaps addressed" table below.
 
@@ -406,7 +406,7 @@ U_MEMORY=1 U_PI_MEMORY="$PWD/tests/fake-pi-memory" FAKE_MEMORY_RC=0 bin/job run 
 check "a passing memory pass completes" 0 "$?"
 ```
 
-- [x] **Step 2: Run it and watch it fail** — the real store is used, so the test either passes wrongly or hits `~/pi-memory`.
+- [x] **Step 2: Run it and watch it fail** — the real store is used, so the test either passes wrongly or hits `~/agent-memory`.
 
 - [x] **Step 3: Implement** — the fake store's three scripts exit `$FAKE_MEMORY_RC`; `gates.py memory` runs save → lint → receipt and reports which failed.
 

@@ -13,7 +13,7 @@
 # from LightsOut. Watch one full run end to end — preflight, agent, driver,
 # master gates, memory pass, done — before scheduling it. For a build-only
 # rehearsal set AUTOPOST=0 (the driver then leaves the episode built and
-# unposted); set U_MEMORY=0 to rehearse without touching ~/pi-memory.
+# unposted); set U_MEMORY=0 to rehearse without touching ~/agent-memory.
 #
 # VIDEO_REPO is the driver's checkout (default ~/programming/video-automation).
 # `bin/job plan` answers the episode question from that checkout read-only: it

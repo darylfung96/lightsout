@@ -1,0 +1,4 @@
+# accepted legacy flags for prose-lint; one id per line
+e380385f4f7f  # Everything else is accounting and visibility layered on the same files: a run ledger, a sp
+46b98f154998  # No database, no server, no new dependency.
+1f1ffc00f15c  # **Spec:** `docs/design.md` (why), `docs/run-contract.md` (the interface), `docs/memory-pas

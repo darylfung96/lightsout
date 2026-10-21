@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fake qmd-mem.sh — the test double for ~/pi-memory/qmd-mem.sh. Tests point
+# fake qmd-mem.sh — the test double for ~/agent-memory/qmd-mem.sh. Tests point
 # U_PI_MEMORY here so no check ever reaches the real store: this script records
 # the call and exits with FAKE_MEMORY_RC, or fails the save step when
 # FAKE_MEMORY_FAIL=save (tests/run.sh, Task 11).

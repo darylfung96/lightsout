@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fake memory-pass-check.py — the test double for ~/pi-memory's receipt.
+"""fake memory-pass-check.py — the test double for ~/agent-memory's receipt.
 
 Tests point U_PI_MEMORY here so no check ever reaches the real store: this
 script records the call and exits with FAKE_MEMORY_RC, or fails the receipt

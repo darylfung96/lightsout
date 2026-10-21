@@ -677,7 +677,7 @@ rm -rf "$shots" /tmp/shots.json
 # 20 — the memory gate: the pass is one gate, and the store it trusts is
 # swappable, so a stub can fail save, lint or receipt and the job either blocks
 # or completes on the store's verdict (Task 11). HOME is a scratch directory
-# with no pi-memory in it, so a gate that ignored U_PI_MEMORY would fail rather
+# with no store in it, so a gate that ignored U_PI_MEMORY would fail rather
 # than reach the real store.
 fake_memory="$PWD/tests/fake-pi-memory"
 memory_home=$(mktemp -d "${TMPDIR:-/tmp}/lightsout-memory-home.XXXXXX")

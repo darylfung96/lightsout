@@ -13,7 +13,7 @@ unit
 : The date.
 
 inputs
-: `~/pi-memory` search results for the last 24 hours; `notes/60-log.md`.
+: `~/agent-memory` search results for the last 24 hours; `notes/60-log.md`.
 
 stages
 : 1. collect — read the log and the search hits — gate: `exists` on raw.json
