@@ -89,7 +89,8 @@ Verified 2026-10-21: `cargo test` passes 103 tests (27 unit, 7 agent-profile,
 passes 261 checks, and `tests/install.sh` passes 11 checks. Because each path
 has its own failure mode, the profile tests exercise named selection, dsh patch
 validation, a model mismatch, the repair path, the missing-patch warning/refusal
-and an unknown key.
+and an unknown key. Commit `48a15de` is on `main`, and CI run `39645810534`
+passed.
 
 ## Port shape
 
