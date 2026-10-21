@@ -21,10 +21,11 @@ use crate::triage;
 
 pub const USAGE: &str = "usage: lightsout [--workspace DIR] <verb> [name]
 
-  init [dir] [--dry-run]
-                       create a workspace (lightsout.toml, lib/, jobs/noop…)
+  init [dir] [--dry-run] [--home]
+                       create a workspace (lightsout.toml, lib/, jobs/noop…);
+                       --home initializes $LIGHTSOUT_HOME for registered jobs
   doctor               check the workspace and the tools its jobs need
-  list                 jobs that exist
+  list                 jobs that exist, in the workspace and the registry
   status [name]        state from files; --json for machines
   report [--html PATH] the dashboard page (same data as status)
   check [name]         alarm when an expected run never happened: notifies once
@@ -51,6 +52,10 @@ pub const USAGE: &str = "usage: lightsout [--workspace DIR] <verb> [name]
                        restores attempt N's backup
   resume <name>        same as run
   unblock <name>       clear a blocked marker after a human looks
+  job add|list|remove  the global registry: a job directory outside a workspace
+                       (see lightsout job --help)
+  schedule <name> [--launchd] [--at HH:MM]
+                       print the cron line or launchd plist that runs the job
   gate <gate> [opts]   artifact gates (see lightsout gate --help)
   version              print the binary version
 
@@ -79,7 +84,7 @@ fn retry_env(repo: &Path, name: &str) -> Paths {
 }
 
 pub fn list(repo: &Path) -> i32 {
-    for name in repo::job_names(repo) {
+    for name in repo::all_job_names(repo) {
         println!("{name}");
     }
     0
@@ -96,11 +101,14 @@ fn apply_job_env(
 ) {
     cmd.env("REPO", &paths.repo);
     cmd.env("LIGHTSOUT_REPO", &paths.repo);
+    cmd.env("LIGHTSOUT_HOME", crate::registry::home());
+    cmd.env("LIGHTSOUT_LIB", paths.repo.join("lib"));
     if let Ok(exe) = env::current_exe() {
         cmd.env("LIGHTSOUT_BIN", exe);
     }
     cmd.env("JOB", &paths.name);
     cmd.env("JOB_DIR", &paths.dir);
+    cmd.env("LIGHTSOUT_JOB_DIR", &paths.dir);
     cmd.env("STATE", &paths.state);
     cmd.env("OUT", &paths.out);
     cmd.env("LOG", &paths.log);
@@ -200,7 +208,7 @@ fn run_job_with(repo: &Path, name: &str, verb: &str, options: RunOptions<'_>) ->
         retrying,
         agent,
     } = options;
-    if !repo.join("jobs").join(name).join("job.sh").is_file() {
+    if !Paths::new(repo, name).has_job() {
         eprintln!("no such job: {name}");
         return 64;
     }
@@ -233,6 +241,11 @@ fn run_job_with(repo: &Path, name: &str, verb: &str, options: RunOptions<'_>) ->
 
     let mut cmd = Command::new("bash");
     cmd.arg(paths.dir.join("job.sh"));
+    // A registered job runs in its own directory unless the registry names a
+    // workdir; a workspace job keeps the caller's directory, as before.
+    if let Some(workdir) = &paths.workdir {
+        cmd.current_dir(workdir);
+    }
     apply_job_env(&mut cmd, &paths, dry, class, source, retrying, agent);
     let rc = match cmd.status() {
         Ok(status) => child_rc(status),
@@ -351,16 +364,15 @@ enum Check {
 /// job; an alarm that repaired would be a second runner.
 pub fn check(repo: &Path, want: Option<&str>) -> i32 {
     if let Some(name) = want {
-        if !repo.join("jobs").join(name).join("job.sh").is_file() {
+        if !Paths::new(repo, name).has_job() {
             eprintln!("no such job: {name}");
             return 64;
         }
     }
     let _ = fs::create_dir_all(repo.join("logs"));
-    let alerts = repo.join("logs").join("alerts.log");
     let check_log = repo.join("logs").join("check.log");
 
-    let names = repo::job_names(repo);
+    let names = repo::all_job_names(repo);
 
     let mut rc = 0;
     for name in names {
@@ -369,16 +381,19 @@ pub fn check(repo: &Path, want: Option<&str>) -> i32 {
                 continue;
             }
         }
-        if let Check::Blocked = check_job(repo, &name, &alerts, &check_log) {
+        let paths = Paths::new(repo, &name);
+        let _ = fs::create_dir_all(paths.repo.join("logs"));
+        if let Check::Blocked = check_job(&paths, &check_log) {
             rc = 2;
         }
     }
     rc
 }
 
-fn check_job(repo: &Path, name: &str, alerts: &Path, check_log: &Path) -> Check {
-    let state_dir = repo.join("jobs").join(name).join("state");
-    let Some((_, expect)) = state::expect_time(&state_dir) else {
+fn check_job(paths: &Paths, check_log: &Path) -> Check {
+    let name = &paths.name;
+    let state_dir = &paths.state;
+    let Some((_, expect)) = state::expect_time(state_dir) else {
         // A schedule typo is not "nothing to do": without a valid expect time
         // no later tick can decide the job is late, so fail the check and make
         // the scheduler surface it instead of returning a quiet zero. A job
@@ -396,14 +411,14 @@ fn check_job(repo: &Path, name: &str, alerts: &Path, check_log: &Path) -> Check 
     if state_dir.join("done").join(&today).exists() {
         return Check::Quiet;
     }
-    if state::lock_live(&state_dir) {
+    if state::lock_live(state_dir) {
         return Check::Quiet;
     }
     if state_dir.join("blocked").is_file() {
         println!("blocked: {name} missed its {expect} run");
         return Check::Blocked;
     }
-    if state::held_today(&state_dir, &today) {
+    if state::held_today(state_dir, &today) {
         return Check::Quiet;
     }
 
@@ -412,8 +427,8 @@ fn check_job(repo: &Path, name: &str, alerts: &Path, check_log: &Path) -> Check 
         let _ = fs::create_dir_all(state_dir.join("alerts"));
         let _ = fs::write(&marker, format!("{}\t{}\n", clock::iso_now(), expect));
         notify(
-            repo,
-            alerts,
+            &paths.repo,
+            &paths.alerts(),
             check_log,
             &format!("LightsOut: {name} stale"),
             &format!("no run by {expect} today"),
@@ -632,7 +647,7 @@ fn run_repair(paths: &Paths, repair: &str) -> Result<(), i32> {
 }
 
 pub fn run_auto(repo: &Path, name: &str, class: Option<&str>, source: Option<&str>) -> i32 {
-    if !repo.join("jobs").join(name).join("job.sh").is_file() {
+    if !Paths::new(repo, name).has_job() {
         eprintln!("no such job: {name}");
         return 64;
     }
@@ -660,7 +675,7 @@ pub fn run_auto(repo: &Path, name: &str, class: Option<&str>, source: Option<&st
             return 64;
         }
     };
-    let policy_file = triage::policy_path(repo);
+    let policy_file = triage::policy_path(&paths.repo);
     let policy = match triage::Policy::load(&policy_file) {
         Ok(policy) => policy,
         Err(error) => {
@@ -668,7 +683,7 @@ pub fn run_auto(repo: &Path, name: &str, class: Option<&str>, source: Option<&st
             return 64;
         }
     };
-    if let Err(error) = policy.check_repairs(repo) {
+    if let Err(error) = policy.check_repairs(&paths.repo) {
         eprintln!("{}: {error}", policy_file.display());
         return 64;
     }
@@ -871,7 +886,7 @@ fn agent_attempt(
         );
         return 2;
     }
-    if let Err(error) = heal::reserve_workspace_attempt(repo, &paths.name, action) {
+    if let Err(error) = heal::reserve_workspace_attempt(&paths.repo, &paths.name, action) {
         eprintln!("heal: {error}");
         return 2;
     }
@@ -924,9 +939,9 @@ fn agent_attempt(
         return 2;
     }
 
-    let before_files = heal::fingerprint(repo, paths);
+    let before_files = heal::fingerprint(paths);
     let outcome = heal::call_agent(paths, &attempt, &prompt_path, timeout, &profile);
-    let after_files = heal::fingerprint(repo, paths);
+    let after_files = heal::fingerprint(paths);
     if let Some(path) = heal::first_change(&before_files, &after_files) {
         record_heal(paths, &attempt, action, &before, &before, "violation", 2);
         eprintln!(
@@ -1066,7 +1081,7 @@ fn latest_proposal(paths: &Paths) -> Option<(usize, std::path::PathBuf)> {
 }
 
 fn heal_apply(repo: &Path, name: &str) -> i32 {
-    if !repo.join("jobs").join(name).join("job.sh").is_file() {
+    if !Paths::new(repo, name).has_job() {
         eprintln!("no such job: {name}");
         return 64;
     }
@@ -1198,7 +1213,7 @@ fn heal_apply(repo: &Path, name: &str) -> i32 {
 }
 
 fn heal_revert(repo: &Path, name: &str, number: usize) -> i32 {
-    if !repo.join("jobs").join(name).join("job.sh").is_file() {
+    if !Paths::new(repo, name).has_job() {
         eprintln!("no such job: {name}");
         return 64;
     }
@@ -1322,7 +1337,7 @@ pub fn heal(repo: &Path, argv: &[String]) -> i32 {
         println!("{name} is not blocked; nothing to heal");
         return 0;
     };
-    let policy_file = triage::policy_path(repo);
+    let policy_file = triage::policy_path(&paths.repo);
     let policy = match triage::Policy::load(&policy_file) {
         Ok(policy) => policy,
         Err(error) => {
@@ -1330,7 +1345,7 @@ pub fn heal(repo: &Path, argv: &[String]) -> i32 {
             return 64;
         }
     };
-    if let Err(error) = policy.check_repairs(repo) {
+    if let Err(error) = policy.check_repairs(&paths.repo) {
         eprintln!("{}: {error}", policy_file.display());
         return 64;
     }
@@ -1391,7 +1406,7 @@ pub fn heal(repo: &Path, argv: &[String]) -> i32 {
 }
 
 pub fn unblock(repo: &Path, name: &str) -> i32 {
-    if !repo.join("jobs").join(name).join("job.sh").is_file() {
+    if !Paths::new(repo, name).has_job() {
         eprintln!("no such job: {name}");
         return 64;
     }

@@ -450,7 +450,7 @@ pub fn run(repo: &Path, name: &str) -> i32 {
     }
     // diagnose_env creates state/ only: the report is the one thing it writes.
     let _ = fs::create_dir_all(&paths.state);
-    let report = build(repo, &paths);
+    let report = build(&paths.repo, &paths);
     let path: PathBuf = paths.state.join("diagnosis.md");
     if let Err(error) = fs::write(&path, &report) {
         eprintln!("cannot write {}: {error}", path.display());

@@ -104,6 +104,12 @@ bin/            scaffold, job, report and lightsout launchers
 `state/resources/` is created on the first cross-job resource lock; it lives at
 the workspace root so two jobs contend for the same lock.
 
+A job does not have to live in this workspace. `lightsout init --home` writes
+the same libraries into `$LIGHTSOUT_HOME` (`~/.config/lightsout` by default),
+and `lightsout job add <name> --command CMD` registers a generated command job
+there, so `lightsout run <name>` works from any directory; `docs/universal.md`
+covers the registry and the `schedule` printer.
+
 The marker records the workspace schema and the manager version that wrote it:
 
 ```toml

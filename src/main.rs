@@ -7,7 +7,9 @@ mod commands;
 mod diagnose;
 mod gates;
 mod heal;
+mod registry;
 mod repo;
+mod schedule;
 mod state;
 mod status;
 mod triage;
@@ -69,6 +71,18 @@ fn run(argv: &[String]) -> i32 {
         return 0;
     };
     let rest = &argv[1..];
+    // A malformed registry is a hard error for any verb that resolves a job:
+    // falling back to a workspace job of the same name would run the wrong
+    // thing. `init`, `gate` and `job` handle their own files.
+    if !matches!(
+        verb,
+        "help" | "-h" | "--help" | "version" | "init" | "gate" | "gates" | "job"
+    ) {
+        if let Err(error) = registry::check() {
+            eprintln!("registry: {error}");
+            return 2;
+        }
+    }
     match verb {
         "help" | "-h" | "--help" => {
             println!("{}", commands::USAGE);
@@ -81,9 +95,11 @@ fn run(argv: &[String]) -> i32 {
         "init" => workspace::init(rest),
         "doctor" => workspace::doctor(&repo::root()),
         "gate" | "gates" => gates::run(rest),
+        "job" => registry::cli(rest),
         "list" => with_workspace(commands::list),
         "status" | "report" => with_workspace(|_| status::run(rest)),
         "check" => with_workspace(|root| commands::check(root, rest.first().map(String::as_str))),
+        "schedule" => with_workspace(|root| schedule::run(root, rest)),
         "plan" => match rest.first() {
             Some(name) => with_workspace(|root| commands::plan(root, name)),
             None => {
@@ -125,11 +141,14 @@ fn with_workspace(body: impl FnOnce(&Path) -> i32) -> i32 {
 
 fn workspace_root() -> Result<PathBuf, i32> {
     let root = repo::root();
-    if repo::is_workspace(&root) {
+    // A registry entry names its own job directory and workspace, so the
+    // current directory does not have to be a workspace for a registered job.
+    if repo::is_workspace(&root) || registry::is_configured() {
         Ok(root)
     } else {
         eprintln!("not a LightsOut workspace: {}", root.display());
         eprintln!("  create one with: lightsout init <dir>");
+        eprintln!("  or register a job with: lightsout job add <name> --job-dir <dir>");
         Err(64)
     }
 }

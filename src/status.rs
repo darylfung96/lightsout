@@ -37,15 +37,16 @@ pub struct JobState {
 }
 
 fn job_state(repo: &Path, name: &str) -> JobState {
-    let dir = repo.join("jobs").join(name);
-    let st = dir.join("state");
-    let out = dir.join("out");
+    let paths = repo::Paths::new(repo, name);
+    let dir = paths.dir.clone();
+    let st = paths.state.clone();
+    let out = paths.out.clone();
     let today = clock::today();
-    let log = dir.join("logs").join(format!("{today}.log"));
+    let log = paths.log.clone();
 
     let mut rec = JobState {
         name: name.to_string(),
-        has_job: dir.join("job.sh").is_file(),
+        has_job: paths.has_job(),
         has_spec: dir.join("spec.md").is_file(),
         state: "never run".into(),
         detail: String::new(),
@@ -100,10 +101,10 @@ fn job_state(repo: &Path, name: &str) -> JobState {
         rec.state = "running".into();
     }
 
-    // A run that exited 1 and left no block is a failed run, not a job that
-    // has never run. The last_exit column already carries the code; the state
-    // column has to agree with it.
-    if rec.state == "never run" && rec.last_exit == Some(1) {
+    // A run that exited non-zero and left no block is a failed run, not a job
+    // that has never run. The last_exit column already carries the code; the
+    // state column has to agree with it.
+    if rec.state == "never run" && rec.last_exit.is_some_and(|rc| rc != 0) {
         rec.state = "failed".into();
     }
 
@@ -164,7 +165,7 @@ fn last_stage_line(body: &str) -> Option<(String, String, String)> {
 }
 
 fn jobs(repo: &Path) -> Vec<JobState> {
-    repo::job_names(repo)
+    repo::all_job_names(repo)
         .iter()
         .map(|name| job_state(repo, name))
         .collect()
@@ -341,7 +342,7 @@ pub fn run(argv: &[String]) -> i32 {
         }
     };
     if let Some(name) = &args.name {
-        if !repo.join("jobs").join(name).join("job.sh").is_file() {
+        if !repo::Paths::new(&repo, name).has_job() {
             eprintln!("no such job: {name}");
             return 64;
         }

@@ -23,6 +23,13 @@ if ! mkdir "$tests_lock" 2>/dev/null; then
 fi
 trap 'rmdir "$tests_lock" 2>/dev/null || true' EXIT
 
+# Keep the developer's registry out of the fixture assertions: a registered job
+# with the same name would appear in `list` and `status`.
+LIGHTSOUT_HOME="${TMPDIR:-/tmp}/lightsout-tests-registry.$$"
+rm -rf "$LIGHTSOUT_HOME"
+export LIGHTSOUT_HOME
+trap 'rm -rf "$LIGHTSOUT_HOME"; rmdir "$tests_lock" 2>/dev/null || true' EXIT
+
 check() { # check <label> <want> <got>
   if [ "$2" = "$3" ]; then printf 'ok   %s\n' "$1"
   else printf 'FAIL %s (want %s, got %s)\n' "$1" "$2" "$3"; fails=$((fails + 1)); fi

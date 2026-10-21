@@ -12,10 +12,11 @@ use crate::agent;
 use crate::repo;
 use crate::state;
 
-const USAGE: &str = "usage: lightsout init [--dry-run] [dir]
+const USAGE: &str = "usage: lightsout init [--dry-run] [--home] [dir]
        lightsout doctor
 
-init   write a new workspace (lightsout.toml, lib/, jobs/noop, spec/, bin/)
+init   write a new workspace (lightsout.toml, lib/, jobs/noop, spec/, bin/);
+       --home initializes $LIGHTSOUT_HOME instead, for registered jobs
 doctor check the workspace marker, shell libraries, jobs and dependencies
 
 Global options: --workspace DIR  --version  --help
@@ -148,10 +149,12 @@ fn file(rel: &'static str, body: &str, mode: u32) -> TemplateFile {
 pub fn init(argv: &[String]) -> i32 {
     let mut target: Option<String> = None;
     let mut dry_run = false;
+    let mut home = false;
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
             "--dry-run" => dry_run = true,
+            "--home" => home = true,
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return 0;
@@ -182,16 +185,24 @@ pub fn init(argv: &[String]) -> i32 {
         i += 1;
     }
 
-    let target = match target {
-        Some(target) => target,
-        None => env::var("LIGHTSOUT_REPO")
-            .ok()
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| {
-                env::current_dir()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|_| ".".into())
-            }),
+    let target = if home {
+        if target.is_some() {
+            eprintln!("init: --home takes no directory");
+            return 64;
+        }
+        crate::registry::home().display().to_string()
+    } else {
+        match target {
+            Some(target) => target,
+            None => env::var("LIGHTSOUT_REPO")
+                .ok()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| {
+                    env::current_dir()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|_| ".".into())
+                }),
+        }
     };
     let target = absolute(Path::new(&target));
     if target.exists() && !target.is_dir() {
@@ -282,6 +293,23 @@ fn absolute(path: &Path) -> PathBuf {
     }
 }
 
+/// Write every template that is missing and never overwrite one that exists.
+/// `job add` uses this so a generated command job can source `lib/guards.sh`
+/// from `LIGHTSOUT_HOME` without asking the operator to run `init` first.
+pub fn init_missing(root: &Path) -> Result<(), String> {
+    fs::create_dir_all(root)
+        .map_err(|error| format!("cannot create {}: {error}", root.display()))?;
+    for template in templates() {
+        let path = root.join(template.rel);
+        if path.exists() {
+            continue;
+        }
+        write_template(&path, &template.body, template.mode)
+            .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+    }
+    Ok(())
+}
+
 fn shell_quote(value: &str) -> String {
     if value
         .chars()
@@ -309,12 +337,21 @@ fn write_template(path: &Path, body: &str, mode: u32) -> std::io::Result<()> {
 pub fn doctor(root: &Path) -> i32 {
     let mut errors = 0usize;
     let mut warnings = 0usize;
-    println!("workspace {}", root.display());
 
     if !root.is_dir() {
+        println!("workspace {}", root.display());
         fail(&mut errors, &format!("not a directory: {}", root.display()));
         return finish(errors, warnings);
     }
+
+    // Outside a workspace the registry is the whole picture, so `doctor` can
+    // still answer whether the registered jobs are runnable.
+    if !repo::is_workspace(root) && crate::registry::is_configured() {
+        println!("registry {}", crate::registry::path().display());
+        check_registry(root, &mut errors);
+        return finish(errors, warnings);
+    }
+    println!("workspace {}", root.display());
 
     if repo::has_marker(root) {
         let body = state::read_lossy(&root.join(repo::MARKER));
@@ -538,7 +575,59 @@ pub fn doctor(root: &Path) -> i32 {
         );
     }
 
+    check_registry(root, &mut errors);
+
     finish(errors, warnings)
+}
+
+/// Registered jobs are checked from any workspace, because a name that
+/// resolves nowhere is worse than a missing local job.
+fn check_registry(_root: &Path, errors: &mut usize) {
+    let jobs = match crate::registry::load() {
+        Ok(jobs) => jobs,
+        Err(error) => {
+            fail(errors, &format!("registry: {error}"));
+            return;
+        }
+    };
+    for (name, entry) in jobs {
+        if !entry.job_dir.join("job.sh").is_file() {
+            fail(
+                errors,
+                &format!(
+                    "registry job '{name}' has no job.sh at {}",
+                    entry.job_dir.display()
+                ),
+            );
+            continue;
+        }
+        if let Some(workspace) = &entry.workspace {
+            if !repo::is_workspace(workspace) {
+                fail(
+                    errors,
+                    &format!(
+                        "registry job '{name}' workspace is not a LightsOut workspace: {}",
+                        workspace.display()
+                    ),
+                );
+                continue;
+            }
+            if !workspace.join("lib").join("guards.sh").is_file() {
+                fail(
+                    errors,
+                    &format!(
+                        "registry job '{name}' workspace has no lib/guards.sh: {}",
+                        workspace.display()
+                    ),
+                );
+                continue;
+            }
+        }
+        ok(&format!(
+            "registry job '{name}' -> {}",
+            entry.job_dir.display()
+        ));
+    }
 }
 
 fn check_agent_profile(root: &Path, job: &str, errors: &mut usize, warnings: &mut usize) {

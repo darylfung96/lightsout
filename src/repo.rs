@@ -9,6 +9,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::registry;
+
 pub const MARKER: &str = "lightsout.toml";
 pub const CURRENT_SCHEMA: u32 = 1;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -42,6 +44,21 @@ pub fn job_names(root: &Path) -> Vec<String> {
         })
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .collect();
+    names.sort();
+    names
+}
+
+/// Workspace jobs plus every registered job. A registered name that also
+/// exists in the workspace appears once, and `Paths::new` picks the workspace
+/// definition, so `list`, `check` and `status` cannot disagree about which job
+/// a name means.
+pub fn all_job_names(root: &Path) -> Vec<String> {
+    let mut names = job_names(root);
+    for name in registry::names() {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
     names.sort();
     names
 }
@@ -129,11 +146,25 @@ pub struct Paths {
     pub out: PathBuf,
     pub log: PathBuf,
     pub unit: String,
+    pub workdir: Option<PathBuf>,
 }
 
 impl Paths {
     pub fn new(repo: &Path, name: &str) -> Self {
-        let dir = repo.join("jobs").join(name);
+        let local = repo.join("jobs").join(name);
+        // A job in the current workspace wins over a registry entry of the same
+        // name: the operator pointed at this workspace, and its definition is
+        // the one they can see. Everywhere else the registry makes a job
+        // callable by name.
+        if !local.join("job.sh").is_file() {
+            if let Some(entry) = registry::lookup(name) {
+                return Self::registered(name, entry);
+            }
+        }
+        Self::in_workspace(repo, name, local)
+    }
+
+    fn in_workspace(repo: &Path, name: &str, dir: PathBuf) -> Self {
         let unit = env::var("UNIT")
             .ok()
             .filter(|u| !u.is_empty())
@@ -149,6 +180,34 @@ impl Paths {
             dir,
             log,
             unit,
+            workdir: None,
+        }
+    }
+
+    fn registered(name: &str, entry: registry::Entry) -> Self {
+        let unit = env::var("UNIT")
+            .ok()
+            .filter(|u| !u.is_empty())
+            .unwrap_or_else(crate::clock::today);
+        let dir = entry.job_dir;
+        let log = dir
+            .join("logs")
+            .join(format!("{}.log", crate::clock::today()));
+        let state = entry.state_dir.unwrap_or_else(|| dir.join("state"));
+        let out = dir.join("out");
+        let workdir = entry.workdir.or_else(|| Some(dir.clone()));
+        Paths {
+            // `workspace` is the job's shared root for lib/, triage.conf and
+            // the alert log; a job with no workspace uses the registry home,
+            // which `job add` initializes.
+            repo: entry.workspace.unwrap_or_else(registry::home),
+            name: name.to_string(),
+            dir,
+            state,
+            out,
+            log,
+            unit,
+            workdir,
         }
     }
 

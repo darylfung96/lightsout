@@ -237,7 +237,7 @@ impl Policy {
     pub fn warnings(&self, repo: &Path) -> Vec<String> {
         let mut out = Vec::new();
         for rule in &self.rules {
-            if rule.job != "*" && !repo.join("jobs").join(&rule.job).join("job.sh").is_file() {
+            if rule.job != "*" && !Paths::new(repo, &rule.job).has_job() {
                 out.push(format!(
                     "triage.conf:{}: rule names a missing job '{}'",
                     rule.line, rule.job
@@ -422,7 +422,7 @@ pub fn run(repo: &Path, argv: &[String]) -> i32 {
         return 0;
     };
 
-    let path = policy_path(repo);
+    let path = policy_path(&paths.repo);
     let policy = match Policy::load(&path) {
         Ok(policy) => policy,
         Err(error) => {
@@ -430,7 +430,7 @@ pub fn run(repo: &Path, argv: &[String]) -> i32 {
             return 64;
         }
     };
-    if let Err(error) = policy.check_repairs(repo) {
+    if let Err(error) = policy.check_repairs(&paths.repo) {
         eprintln!("{}: {error}", path.display());
         return 64;
     }
@@ -452,7 +452,7 @@ pub fn run(repo: &Path, argv: &[String]) -> i32 {
         .filter(|profile| profile.configured || resolution.action.is_agent())
         .map(|profile| profile.to_json());
     let heals = heal_count(&paths.state);
-    let workspace = workspace_heal_count(repo);
+    let workspace = workspace_heal_count(&paths.repo);
     let max = max_heals();
     let max_total = max_heals_total();
     let matched = policy.matched_text(&resolution);

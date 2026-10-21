@@ -25,6 +25,9 @@ This repository builds them once.
   validation and backups bound the attempt. `docs/auto-repair.md`
 - **A memory pass** — the last stage of every job, so an unattended agent obeys
   the same replace-never-append rules a session does. `docs/memory-pass.md`
+- **Universal mode** — register a job directory by name, and `run`, `status`,
+  `check` and `heal` resolve it from anywhere; `schedule` prints the cron line
+  or launchd plist. `docs/universal.md`
 - **Visibility** — `bin/report` renders every job's state from its state files.
 
 ## Install
@@ -42,6 +45,12 @@ A release installer, Homebrew formula and the workspace marker are documented
 in [docs/install.md](docs/install.md). The repository itself is a workspace, so
 the development commands below still work from this checkout.
 
+A job does not have to live in a workspace. `lightsout job add backup --command
+'rsync -a ~/work /Volumes/backup/work'` writes the job under
+`~/.config/lightsout`, and `lightsout run backup` works from any directory;
+[docs/universal.md](docs/universal.md) covers the registry, `--job-dir`,
+`--workspace` and the `schedule` printer.
+
 ## Quickstart in this checkout
 
 ```sh
@@ -56,15 +65,15 @@ bin/report --html out/status.html  # static page, no server
 ## Layout
 
 ```
-docs/         run contract, install, agent step, memory pass, design notes
-src/          the Rust manager: verbs, gates, dashboard, diagnose, workspace
+docs/         run contract, install, universal mode, agent step, memory pass, design notes
+src/          the Rust manager: verbs, gates, dashboard, diagnose, workspace, registry
 lib/          the shell job libraries: guards, locks, notify, agent, memory, repairs
 bin/          job and report launchers, plus scaffold
 jobs/<name>/  one directory per automation: job.sh, spec.md, state/, logs/, out/
 spec/         the intent format, plus examples
 triage.conf   the workspace auto-repair policy
 agents.conf   named agent profiles (a job opts in with jobs/<name>/agent.conf)
-tests/        the 261 contract checks, auto-repair tests and workspace tests
+tests/        the 261 contract checks, auto-repair, workspace and universal-mode tests
 packaging/    Homebrew formula and macOS signing helper
 install.sh    checksum-verifying release installer
 lightsout.toml  this repository's workspace marker

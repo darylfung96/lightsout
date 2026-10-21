@@ -63,6 +63,9 @@ fn run_env(cwd: &Path, args: &[&str], vars: &[(&str, &str)]) -> Output {
     command.env("U_NOTIFY", "0");
     command.env("U_MEMORY", "0");
     command.env_remove("LIGHTSOUT_REPO");
+    // Keep the developer's registry out of these assertions: a registered job
+    // named "noop" would change `list` and `status`.
+    command.env("LIGHTSOUT_HOME", cwd.join(".lightsout-registry"));
     for (key, value) in vars {
         command.env(key, value);
     }

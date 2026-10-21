@@ -380,8 +380,8 @@ fn load_workspace(root: &Path) -> Result<BTreeMap<String, Profile>, ProfileError
     Ok(profiles)
 }
 
-fn load_job(root: &Path, job: &str) -> Result<Option<JobFile>, ProfileError> {
-    let path = root.join("jobs").join(job).join(JOB_PROFILE);
+fn load_job(job_dir: &Path) -> Result<Option<JobFile>, ProfileError> {
+    let path = job_dir.join(JOB_PROFILE);
     if !path.is_file() {
         return Ok(None);
     }
@@ -402,8 +402,8 @@ fn load_job(root: &Path, job: &str) -> Result<Option<JobFile>, ProfileError> {
     }))
 }
 
-fn load(root: &Path, job: &str) -> Result<Resolved, ProfileError> {
-    let Some(job_file) = load_job(root, job)? else {
+fn load(root: &Path, job_dir: &Path) -> Result<Resolved, ProfileError> {
+    let Some(job_file) = load_job(job_dir)? else {
         return Ok(Resolved::default());
     };
     let mut profile = if let Some(selected) = &job_file.selected {
@@ -741,17 +741,21 @@ fn home() -> PathBuf {
 
 /// Resolve the effective profile for a job, including environment overrides.
 pub fn resolve(root: &Path, job: &str, for_heal: bool) -> Result<Resolved, ProfileError> {
-    let mut resolved = load(root, job)?;
+    // A registered job keeps its own directory and workspace; the resolver
+    // reads `agent.conf` from the job and `agents.conf` from that workspace.
+    let paths = crate::repo::Paths::new(root, job);
+    let mut resolved = load(&paths.repo, &paths.dir)?;
     resolved.apply_environment(for_heal);
-    resolved.finalize(root)?;
+    resolved.finalize(&paths.repo)?;
     Ok(resolved)
 }
 
 /// Resolve only the files on disk; `doctor` uses this so a test's `U_RUNNER`
 /// cannot hide the profile that will run in a scheduler.
 pub fn resolve_config(root: &Path, job: &str) -> Result<Resolved, ProfileError> {
-    let mut resolved = load(root, job)?;
-    resolved.finalize(root)?;
+    let paths = crate::repo::Paths::new(root, job);
+    let mut resolved = load(&paths.repo, &paths.dir)?;
+    resolved.finalize(&paths.repo)?;
     Ok(resolved)
 }
 

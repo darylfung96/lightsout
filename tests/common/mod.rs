@@ -172,6 +172,9 @@ impl Sandbox {
         cmd.env("U_NOTIFY", "0");
         cmd.env("U_MEMORY", "0");
         cmd.env("LIGHTSOUT_REPO", &self.root);
+        // The registry must not read the developer's real home: a job named
+        // like a fixture would leak into `list`, `status` and `check`.
+        cmd.env("LIGHTSOUT_HOME", self.root.join("home/.config/lightsout"));
         cmd.env("TMPDIR", self.root.join("tmp"));
         cmd.env("HOME", self.root.join("home"));
     }

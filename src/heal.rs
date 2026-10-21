@@ -1204,12 +1204,21 @@ pub struct Fingerprint {
 /// the manager write the prompt, proposal and log there on purpose; every other
 /// job and code directory is in scope, because an agent that can edit a
 /// neighbouring job's `job.sh` has escaped the job it was asked to repair.
-pub fn fingerprint(repo: &Path, paths: &Paths) -> Fingerprint {
+pub fn fingerprint(paths: &Paths) -> Fingerprint {
     let mut entries = Vec::new();
     let skip = paths.state.join("heal");
-    walk_fingerprint(repo, &repo.join("jobs"), Some(&skip), &mut entries);
+    let workspace = &paths.repo;
+    // A registered job may live outside its workspace, so its own directory is
+    // walked too; a workspace job is already under jobs/ and dedups below.
+    walk_fingerprint(
+        workspace,
+        &workspace.join("jobs"),
+        Some(&skip),
+        &mut entries,
+    );
+    walk_fingerprint(workspace, &paths.dir, Some(&skip), &mut entries);
     for dir in ["lib", "spec", "bin", "src", "tests", "packaging"] {
-        walk_fingerprint(repo, &repo.join(dir), None, &mut entries);
+        walk_fingerprint(workspace, &workspace.join(dir), None, &mut entries);
     }
     for rel in [
         "triage.conf",
@@ -1219,10 +1228,10 @@ pub fn fingerprint(repo: &Path, paths: &Paths) -> Fingerprint {
         "Cargo.lock",
         "install.sh",
     ] {
-        let path = repo.join(rel);
+        let path = workspace.join(rel);
         if let Ok(meta) = fs::metadata(&path) {
             entries.push((
-                path.strip_prefix(repo).unwrap_or(&path).to_path_buf(),
+                path.strip_prefix(workspace).unwrap_or(&path).to_path_buf(),
                 meta.len(),
                 modified(meta),
             ));

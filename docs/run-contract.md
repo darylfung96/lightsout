@@ -121,7 +121,16 @@ U_BLOCK_SOURCE  default source for a block raised in this run (unknown unless
                 `bin/job run --source` says otherwise)
 LIGHTSOUT_BIN   path to the manager binary, so lib/guards.sh runs the same
                 gate implementation
+LIGHTSOUT_HOME  the registry home (default ~/.config/lightsout), so a job can
+                find a registered sibling or a generated library
+LIGHTSOUT_JOB_DIR  the job directory, which is not always under REPO/jobs
+LIGHTSOUT_LIB   REPO/lib, so a job outside a workspace sources the same guards
 ```
+
+A registered job keeps this environment, but `JOB_DIR`, `STATE` and `OUT` point
+at its own directory, and `REPO` is the workspace the registry names (or
+`LIGHTSOUT_HOME` when it names none); [universal.md](universal.md) covers the
+registry.
 
 ## State layout
 
