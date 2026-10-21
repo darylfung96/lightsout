@@ -133,3 +133,28 @@ which is the day guard doing its job. The plist is
 Verified 2026-10-21: `tests/video_prune.rs` passes 4 tests (dry-run, apply, plan-is-read-only
 and symlink refusal), `cargo test` passes 107 tests, `tests/run.sh` passes 261
 checks, and `tests/install.sh` passes 11 checks.
+
+## [2026-10-21] decision | a job can be registered outside a workspace
+
+Added `lightsout job add|list|remove` and `$LIGHTSOUT_HOME/jobs.json`, because
+the review handoff asked whether LightsOut could be universal like cron. The
+registry maps a name to a job directory, an optional workspace, workdir and
+state directory, and `run`, `status`, `check`, `triage`, `heal` and `diagnose`
+resolve it when the current workspace has no job of that name; a workspace job
+still wins, so nothing in this repository changed behaviour. `job add
+--command` writes a generated command job whose exit code is the gate, and
+`init --home` writes the `lib/` templates that job sources, so a command job
+needs no workspace at all. `schedule` prints the cron line or launchd plist
+from `state/expect` (or `--at`) and installs nothing, because cron and launchd
+still own *when* and a crashed scheduler must not take the run history with it.
+A malformed registry fails closed with exit 2, and `doctor` checks every entry.
+
+The review fixes from the same session are committed as `12c6658`; they cover
+the stale-proposal and revert-order refusals, the workspace-level resource
+locks, the shared bounded watchdog, the dead-lock check, the per-day heal cap
+and the status/report truthfulness fixes.
+
+Verified 2026-10-21: `tests/universal_mode.rs` passes 9 tests, `cargo test`
+passes 139 tests, `tests/run.sh` passes 261 checks, `tests/install.sh` passes
+11 checks, and `prose-lint.py` passes the changed docs. Committed as `78b1cce`
+on `main`.

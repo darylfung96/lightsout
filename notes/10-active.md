@@ -107,15 +107,34 @@ free space from 3,605 MB to 7,131 MB. The launchd agent
 `com.everydaylaws.video-prune` runs the job at 23:30 daily. The job uses no
 agent and sets `U_MEMORY=0` because it writes no notes.
 
+## Universal mode
+
+A job can live outside a workspace as of 2026-10-21, because a backup or a log
+rotation has no reason to sit in the LightsOut checkout. `lightsout job add`
+writes `$LIGHTSOUT_HOME/jobs.json`, `run`, `status`, `check`, `triage`, `heal`
+and `diagnose` resolve a registered name when the current workspace has no job
+of it, and `job add --command` generates a command job whose exit code is the
+gate. `init --home` writes the `lib/` templates that job sources, and
+`schedule` prints the cron line or launchd plist without installing it, because
+cron or launchd still owns *when*.
+
+Verified 2026-10-21: `tests/universal_mode.rs` passes 9 tests, `cargo test`
+passes 139 tests, `tests/run.sh` passes 261 checks, and `tests/install.sh`
+passes 11 checks. Commit `78b1cce` is on `main`.
 
 ## Port shape
 
 - `bin/job` and `bin/report` are launchers that find the built binary;
   `bin/lightsout` is the built artifact and is gitignored.
 - `lightsout` owns `list`, `status`, `report`, `check`, `plan`, `diagnose`,
-  `run`, `resume`, `retry`, `triage`, `heal`, `unblock` and `gate`.
+  `run`, `resume`, `retry`, `triage`, `heal`, `unblock`, `gate`,
+  `job add|list|remove` and `schedule`; `init --home` initializes the registry
+  home.
 - `lib/guards.sh` and `lib/memory.sh` call `$LIGHTSOUT_BIN gate`, so a job and
   the manager run the same gate implementation.
+- `src/registry.rs` resolves a name to a job directory, and `src/schedule.rs`
+  prints the trigger; `src/repo.rs` prefers a workspace job over a registry
+  entry of the same name.
 - `tests/tasks_01_12.rs` and `tests/tasks_13_23.rs` group the ported checks by
   the shell suite's task sections, and `tests/check_manifest.rs` asserts the
   per-section counts sum to 261.
@@ -124,3 +143,5 @@ agent and sets `U_MEMORY=0` because it writes no notes.
 
 - Should `job check` be the only stale detector, or should the dashboard compute
   it too? Both read the same files, so this is a display choice.
+- Should `schedule` grow an `--install` form that writes the crontab or plist,
+  or stay print-only so the scheduler remains a human decision?

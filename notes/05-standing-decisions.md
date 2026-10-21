@@ -76,3 +76,23 @@ operator can test a different runner without editing the job. The resolved
 profile appears in `plan`, `triage`, `doctor` and the heal history, because the
 pin has to be visible after the call. The manager never writes the profile,
 because a learned model rule would hide which model ran.
+
+## D9 — A job is a directory, and the registry names it
+
+A job does not have to live in the workspace that owns `lib/` and
+`triage.conf`, because a backup or a log rotation has no reason to sit in the
+LightsOut checkout. `lightsout job add` writes `$LIGHTSOUT_HOME/jobs.json`,
+which maps a name to a job directory, an optional workspace and an optional
+workdir; `run`, `status`, `check`, `triage`, `heal` and `diagnose` resolve the
+name through it, so the current directory does not have to be a workspace. A
+workspace job of the same name wins, because the operator pointed at that
+workspace and its definition is the one they can see. `job add --command`
+generates a command job whose exit code is the gate, so "anything" means an
+arbitrary command under the same guards and state files. `schedule` prints the
+cron line or launchd plist and installs nothing, because cron or launchd still
+owns *when* and a crashed scheduler must not take the run history with it. A
+malformed registry fails closed with exit 2 instead of falling back to a
+workspace job of the same name.
+
+Verified 2026-10-21: the generated command job's exit code is the gate in
+`tests/universal_mode.rs`.

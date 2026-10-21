@@ -9,4 +9,5 @@
 - `../docs/auto-repair.md` — the triage policy, the two agent modes, caps and revert.
 - `../docs/superpowers/plans/2026-10-21-auto-repair.md` — the 8-task auto-repair plan.
 - `../docs/memory-pass.md` — the durable-memory pass as a job stage.
+- `../docs/universal.md` — the job registry, command jobs and the schedule printer (verified 2026-10-21).
 - `../spec/SCHEMA.md` — the intent format.
