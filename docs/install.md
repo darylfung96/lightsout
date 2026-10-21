@@ -33,20 +33,20 @@ defaults to `$HOME/.local/bin`. Each release also publishes the installer and
 its own `install.sh.sha256`, so the script can be verified before it runs:
 
 ```sh
-base=https://github.com/darylfung96/lightsout/releases/download/v0.1.0
+base=https://github.com/darylfung96/lightsout/releases/download/v0.2.0
 tmp=$(mktemp -d)
 curl -fsSL "$base/install.sh" -o "$tmp/install.sh"
 curl -fsSL "$base/install.sh.sha256" -o "$tmp/install.sh.sha256"
 ( cd "$tmp" && shasum -a 256 -c install.sh.sha256 )
-sh "$tmp/install.sh" --version 0.1.0
+sh "$tmp/install.sh" --version 0.2.0
 ```
 
 The short form is also supported, but it executes the downloaded script
 immediately, so the download-and-inspect form above is the safer habit:
 
 ```sh
-curl -fsSL https://github.com/darylfung96/lightsout/releases/download/v0.1.0/install.sh \
-  | sh -s -- --version 0.1.0
+curl -fsSL https://github.com/darylfung96/lightsout/releases/download/v0.2.0/install.sh \
+  | sh -s -- --version 0.2.0
 ```
 
 Installer options:
@@ -105,7 +105,7 @@ The marker records the workspace schema and the manager version that wrote it:
 
 ```toml
 schema = 1
-manager = "0.1.0"
+manager = "0.2.0"
 ```
 
 Once the marker exists, `init` is idempotent: it reports the existing
@@ -166,7 +166,7 @@ rm ~/.local/bin/lightsout
 
 ## Release process
 
-Tagging `v0.1.0` runs `.github/workflows/release.yml`, which tests the crate,
+Tagging `v0.2.0` runs `.github/workflows/release.yml`, which tests the crate,
 builds the four target archives, generates a `.sha256` beside each archive, and
 attaches them to the GitHub Release. The workflow is also manual-dispatchable,
 so an operator can rebuild assets from `main` without creating a tag.

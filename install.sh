@@ -9,7 +9,7 @@
 #   sh install.sh [--version V] [--prefix DIR] [--workspace DIR] [--dry-run]
 #
 # Environment:
-#   LIGHTSOUT_VERSION    version to install (default 0.1.0; "latest" allowed)
+#   LIGHTSOUT_VERSION    version to install (default 0.2.0; "latest" allowed)
 #   LIGHTSOUT_PREFIX     install prefix (default $HOME/.local)
 #   LIGHTSOUT_BASE_URL   override the release asset directory (mirrors/tests)
 #   LIGHTSOUT_SHA256     expected SHA-256 obtained out-of-band; skips the
@@ -20,7 +20,7 @@
 
 set -eu
 
-VERSION="${LIGHTSOUT_VERSION:-0.1.0}"
+VERSION="${LIGHTSOUT_VERSION:-0.2.0}"
 PREFIX="${LIGHTSOUT_PREFIX:-${PREFIX:-$HOME/.local}}"
 BASE_URL="${LIGHTSOUT_BASE_URL:-}"
 PINNED_SHA="${LIGHTSOUT_SHA256:-}"
@@ -31,7 +31,7 @@ usage() {
   cat <<'TXT'
 usage: install.sh [options]
 
-  --version V       install this version (default 0.1.0; "latest" allowed)
+  --version V       install this version (default 0.2.0; "latest" allowed)
   --prefix DIR      install under DIR/bin (default $HOME/.local)
   --workspace DIR   initialize a workspace after installing
   --dry-run         print what would happen; download and write nothing
