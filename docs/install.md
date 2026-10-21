@@ -33,20 +33,20 @@ defaults to `$HOME/.local/bin`. Each release also publishes the installer and
 its own `install.sh.sha256`, so the script can be verified before it runs:
 
 ```sh
-base=https://github.com/darylfung96/lightsout/releases/download/v0.2.0
+base=https://github.com/darylfung96/lightsout/releases/download/v0.1.0
 tmp=$(mktemp -d)
 curl -fsSL "$base/install.sh" -o "$tmp/install.sh"
 curl -fsSL "$base/install.sh.sha256" -o "$tmp/install.sh.sha256"
 ( cd "$tmp" && shasum -a 256 -c install.sh.sha256 )
-sh "$tmp/install.sh" --version 0.2.0
+sh "$tmp/install.sh" --version 0.1.0
 ```
 
 The short form is also supported, but it executes the downloaded script
 immediately, so the download-and-inspect form above is the safer habit:
 
 ```sh
-curl -fsSL https://github.com/darylfung96/lightsout/releases/download/v0.2.0/install.sh \
-  | sh -s -- --version 0.2.0
+curl -fsSL https://github.com/darylfung96/lightsout/releases/download/v0.1.0/install.sh \
+  | sh -s -- --version 0.1.0
 ```
 
 Installer options:
@@ -105,15 +105,16 @@ The marker records the workspace schema and the manager version that wrote it:
 
 ```toml
 schema = 1
-manager = "0.2.0"
+manager = "0.1.0"
 ```
 
 Once the marker exists, `init` is idempotent: it reports the existing
 workspace and writes nothing, so a repeated setup command cannot overwrite
-local edits. A workspace written by 0.1.0 lacks `triage.conf`, `lib/heal.sh`
-and `lib/prompts/repair.md`; `doctor` names each missing file, and copying them
-from a fresh `init` is enough because the run contract is additive. It refuses to overwrite existing LightsOut files and writes
-nothing when any collision is found; `--dry-run` prints the same plan without
+local edits. A workspace written before auto-repair and agent profiles lacks
+`triage.conf`, `lib/heal.sh`, `lib/prompts/repair.md` and `agents.conf`;
+`doctor` names each missing file, and copying it from a fresh `init` is enough
+because the run contract is additive. It refuses to overwrite existing LightsOut
+files and writes nothing when any collision is found; `--dry-run` prints the same plan without
 creating the directory or any file. An existing `.gitignore` is kept rather
 than replaced, because the file often holds rules the project owned before
 LightsOut arrived.
@@ -168,7 +169,7 @@ rm ~/.local/bin/lightsout
 
 ## Release process
 
-Tagging `v0.2.0` runs `.github/workflows/release.yml`, which tests the crate,
+Tagging `v0.1.0` runs `.github/workflows/release.yml`, which tests the crate,
 builds the four target archives, generates a `.sha256` beside each archive, and
 attaches them to the GitHub Release. The workflow is also manual-dispatchable,
 so an operator can rebuild assets from `main` without creating a tag.

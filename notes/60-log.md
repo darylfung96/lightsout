@@ -58,17 +58,20 @@ new `tests/workspace_cli.rs` passes 7 tests, `tests/install.sh` passes 11 checks
 including a tampered-asset refusal and an out-of-band hash pin, and the 261-check cargo and shell suites
 remain green.
 
-## [2026-10-21] decision | v0.1.0 is published, with a public installer and tap
+## [2026-10-21] decision | v0.1.0 is the single published version
 
 The repository is public at `darylfung96/lightsout`, because the anonymous
-`curl` installer and the Homebrew tap need unauthenticated release assets. The
-tag `v0.1.0` built four targets, published checksums plus the installer and its
-checksum, and the tap lives at `darylfung96/homebrew-lightsout`; the formula
-builds from the tag tarball and its checksum was pinned after the first
-publish attempt exposed a missing checkout in the release job. Verified
-2026-10-21: the release workflow passed, a public install from the release URL
-verified its checksum, initialized a workspace, passed `doctor` and ran `noop`,
-and the Homebrew formula passed `brew audit --strict --online`.
+`curl` installer and the Homebrew tap need unauthenticated release assets.
+There is one release tag, `v0.1.0`, and it carries the whole feature set: the
+run contract, the workspace lifecycle, bounded auto-repair and agent profiles.
+The release workflow builds four targets and publishes checksums plus
+`install.sh`, and the tap at `darylfung96/homebrew-lightsout` builds from the
+tag tarball. Verified 2026-10-21: the release workflow passed, a public install
+from the release URL verified its checksum, initialized a workspace, passed
+`doctor` and ran `noop`, and the Homebrew formula passed
+`brew audit --strict --online`. The release also carries the migration from
+`~/pi-memory` to `~/agent-memory`, because the store moved while the features
+were in flight.
 
 
 ## [2026-10-21] decision | bounded auto-repair lands behind a policy and caps
@@ -84,26 +87,9 @@ cannot spend the next attempt.
 The owner chose `agent:apply` as the default, so `agent:propose` is the
 approval opt-in.
 
-The feature landed with its tests green; the documentation pass, the 0.2.0
-release and the first supervised `heal` on `everyday-laws` remained open at
-that point.
+The feature landed with its tests green; the documentation pass, the release
+and the first supervised `heal` on `everyday-laws` remained open at that point.
 
-
-## [2026-10-21] decision | v0.2.0 publishes bounded auto-repair
-
-Merged `feat/auto-repair` into `main` and tagged `v0.2.0` at `4558957`. The
-release workflow built the four targets, published checksums plus `install.sh`,
-and finished successfully; the four archives and the installer verified
-locally, and the public `install.sh` initialized a workspace, passed `doctor`
-with 0 warnings, ran `noop`, and printed the triage decision. The formula now
-points at `v0.2.0` with sha256
-`beda93b475aa33af7e262c2864d0c29cf082588498407cc78fdc7093986136cd`; the tap
-copy matches and `brew audit --strict --online` passes.
-
-The release also carries the migration from `~/pi-memory` to
-`~/agent-memory`, because the store moved while the feature was in flight. Keep
-the first real `heal` on `everyday-laws` supervised, because the release was
-exercised with the fake runner and the installer, not with a live video build.
 
 ## [2026-10-21] decision | agent profiles pin one runner for a job and its repair
 

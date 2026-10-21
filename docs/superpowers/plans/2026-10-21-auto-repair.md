@@ -251,7 +251,7 @@ writes nothing.
 ### `run --auto-repair`
 
 Also enabled by `LIGHTSOUT_AUTO_REPAIR=1`. Plain `run` is unchanged, so a
-scheduler that does not opt in sees the 0.1.0 behavior.
+scheduler that does not opt in sees the pre-auto-repair behavior.
 
 ```text
 fn run_auto(repo, name):
@@ -605,10 +605,10 @@ a codex sandbox flag). Until an adapter can guarantee it, `doctor` reports
   `tests/install.sh`, `cargo package --list` (no warnings).
 - [ ] **Step 5: Commit** `docs: document bounded auto-repair and its limits`
 
-### Task 8: Release 0.2.0
+### Task 8: Release 0.1.0
 
 **Files:**
-- Modify: `Cargo.toml` (`version = "0.2.0"`)
+- Modify: `Cargo.toml` (`version = "0.1.0"`)
 - Modify: `src/repo.rs` (`VERSION`)
 - Modify: `install.sh` (pinned default)
 - Modify: `packaging/homebrew/lightsout.rb` (tag + sha)
@@ -616,11 +616,11 @@ a codex sandbox flag). Until an adapter can guarantee it, `doctor` reports
 - Modify: `docs/install.md`, `README.md`, `notes/60-log.md`
 
 - [ ] **Step 1: Bump** the version and run the full local suites.
-- [ ] **Step 2: Tag** `v0.2.0`, push, watch the release workflow; verify all
+- [ ] **Step 2: Tag** `v0.1.0`, push, watch the release workflow; verify all
   four checksums and the installer.
 - [ ] **Step 3: Update** the formula's `url`/`sha256`, push the tap, run
   `brew audit --strict --online`.
-- [ ] **Step 4: Commit** `release: 0.2.0 with bounded auto-repair`.
+- [ ] **Step 4: Commit** `release: 0.1.0 with bounded auto-repair`.
 
 ---
 
@@ -662,12 +662,12 @@ New tests live in `tests/auto_repair.rs` and Rust unit tests, not in
 ## Rollout and compatibility
 
 - **Opt-in.** Without `--auto-repair` / `LIGHTSOUT_AUTO_REPAIR=1` and without a
-  `triage.conf`, behavior is byte-identical to 0.1.0.
+  `triage.conf`, behavior is byte-identical to the pre-auto-repair manager.
 - **`retry` unchanged.** The manual path keeps its class check, registry check,
   and `MAX_REPAIRS` cap.
 - **Schema stays 1.** `triage.conf`, `lib/heal.sh`, and the prompt are additive
-  files; a 0.1.0 workspace without them still runs (auto mode says "no policy").
-- **Marker manager version** becomes 0.2.0 for new workspaces; old markers are
+  files; a workspace without them still runs (auto mode says "no policy").
+- **Marker manager version** becomes 0.1.0 for new workspaces; old markers are
   still readable.
 - **Migration:** `lightsout init` in an existing workspace does not overwrite;
   `lightsout doctor` names the missing files and the sample policy. A user adds
@@ -684,8 +684,8 @@ Resolved: D10 now defaults to `agent:apply` per the owner's choice.
    `MAX_AUTO_ATTEMPTS=3` per invocation the right defaults?
 2. **Allowed roots:** is `out/` the right default, with `repair.allow` for more?
 3. **Name:** `heal` and `triage` — or `fix` and `route`?
-4. **Opt-in duration:** keep `--auto-repair` explicit through 0.2.0 and consider
-   default-on in 0.3.0 after the tests have run on real jobs?
+4. **Opt-in duration:** keep `--auto-repair` explicit until the tests have run on
+   real jobs, then consider default-on?
 
 ## Definition of done
 
