@@ -16,7 +16,14 @@ u_memory_check() {
     return 0
   fi
   local files="${U_MEMORY_FILES:-}"
-  "${LIGHTSOUT_BIN:-$REPO/bin/lightsout}" gate memory --files "${files// /,}"
+  local -a args=(gate memory --files "${files// /,}")
+  # A job runs without a session transcript, so it records its own evidence:
+  # save, lint --deep, duplicate scan and a receipt under state/. An agent
+  # session still uses memory-pass-check.py through the same gate.
+  if [ -n "${STATE:-}" ]; then
+    args+=(--receipt "$STATE/memory-pass.json")
+  fi
+  "${LIGHTSOUT_BIN:-$REPO/bin/lightsout}" "${args[@]}"
 }
 
 # Steps 0-5 of the policy, minus the judgment in step 0: a job only calls this

@@ -43,9 +43,9 @@ This repository follows `~/agent-memory` conventions, because the memory pass an
 - **Owner check before creating a page**, because two pages stating one rule
   make retrieval ambiguous.
 - **Every job ends with the memory pass** (`lib/memory.sh`): save the notes it
-  touched, `lint-memory.py --deep`, then the receipt
-  `memory-pass-check.py --latest --cwd "$PWD"` must exit 0. A failed pass is a
-  blocked job, not a warning.
+  touched, `lint-memory.py --deep`, `scan-duplicates.py --from-index`, then
+  record `state/memory-pass.json`. An agent step proves the same pass with
+  `memory-pass-check.py` instead. A failed pass is a blocked job, not a warning.
 - Durability is judgment: balances, build IDs and take numbers belong in a
   progress file, not in memory.
 - Search: `~/agent-memory/qmd-mem.sh search "<terms>" -c lightsout` (needs file

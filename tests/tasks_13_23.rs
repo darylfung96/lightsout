@@ -881,10 +881,9 @@ fn t20_memory_gate() {
         "lint --deep",
         log.lines().nth(1).unwrap_or(""),
     );
-    let cwd = fs::canonicalize(&s.root).unwrap();
     c.check(
-        "the receipt is asked for this workspace",
-        format!("receipt --latest --cwd {}", cwd.display()),
+        "the duplicate scan runs after lint",
+        "scan --from-index",
         log.lines().nth(2).unwrap_or(""),
     );
 

@@ -708,7 +708,8 @@ HOME="$memory_home" U_MEMORY=1 U_PI_MEMORY="$fake_memory" FAKE_MEMORY_RC=0 \
   bin/job run noop >/dev/null 2>&1
 check "a passing memory pass completes" 0 "$?"
 
-# the pass runs save for each named note, then lint, then the receipt
+# the pass runs save for each named note, then lint, then the duplicate scan;
+# the job records its own receipt under state/ (a shell job has no session)
 reset
 rm -f "$memory_log"
 HOME="$memory_home" U_MEMORY=1 U_MEMORY_FILES="notes/00-index.md" \
@@ -720,7 +721,7 @@ check "the pass runs all three store scripts" 3 \
 check "save gets the named note" "qmd-mem save notes/00-index.md" \
   "$(sed -n '1p' "$memory_log" 2>/dev/null)"
 check "lint runs deep" "lint --deep" "$(sed -n '2p' "$memory_log" 2>/dev/null)"
-check "the receipt is asked for this workspace" "receipt --latest --cwd $PWD" \
+check "the duplicate scan runs after lint" "scan --from-index" \
   "$(sed -n '3p' "$memory_log" 2>/dev/null)"
 
 # the gate names the step that failed: any one of the three stops the pass
