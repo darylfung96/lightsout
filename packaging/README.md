@@ -7,3 +7,8 @@
 
 Release assets are named `lightsout-<target>.tar.gz` with a sibling
 `.sha256` file. `install.sh` verifies the checksum before installing.
+
+Launchd and cron triggers are per machine, so none is packaged:
+`lightsout schedule <job> --at HH:MM` prints one and installs nothing.
+`video-prune` needs `PRUNE_APPLY=1`, which the printer does not set, so its
+plist lives beside its `job.sh` at `jobs/video-prune/launchd.plist`.

@@ -126,7 +126,7 @@ The first dry-run listed ten directories (3,521.6 MB) for episodes 016-025; the
 apply removed all ten and moved free space from 3,605 MB to 7,131 MB. A
 kickstart after the done marker existed logged `held: 2026-10-21 already done`,
 which is the day guard doing its job. The plist is
-`packaging/launchd/com.everydaylaws.video-prune.plist`, loaded as
+`jobs/video-prune/launchd.plist`, loaded as
 `com.everydaylaws.video-prune` at 23:30 daily. No agent is involved and
 `U_MEMORY=0` is explicit because the job writes no notes.
 

@@ -23,10 +23,10 @@ letting any job write notes.
   `dsh` model against its patch instead of passing a flag the runner does not
   accept. See `docs/agent-step.md`.
 - **Auto-repair edits artifacts, never the checklist.** An agent proposal is
-  data: the validator refuses `job.sh`, `spec.md`, `state/` and `lib/`, the
-  manager applies edits atomically with a backup, and only the job's gate may
-  pass a gate. `triage.conf` is human-edited; the manager never learns a rule.
-  See `docs/auto-repair.md`.
+  data: the validator refuses `job.sh`, `spec.md`, `repairs.sh`, `state/` and
+  `lib/`, the manager applies edits atomically with a backup, and only the
+  job's gate may pass a gate. `triage.conf` is human-edited; the manager never
+  learns a rule. See `docs/auto-repair.md`.
 - **No secrets in the repo.** Reference a keyring or an env file outside it.
 
 ## Memory (full durable-memory suite)

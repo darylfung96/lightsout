@@ -390,11 +390,11 @@ pub fn build(repo: &Path, paths: &Paths) -> String {
             lines.push(format!("bin/job retry {name}"));
             lines.push(format!("bin/job status {name}"));
             lines.push("```".into());
-            let repairs = crate::commands::registered_repairs(repo);
+            let repairs = crate::commands::registered_repairs(repo, Some(&paths.dir));
             if !repairs.is_empty() {
                 lines.push(String::new());
                 lines.push(format!(
-                    "Registered in `lib/repairs.sh`: {}.",
+                    "Allowlisted repairs (`jobs/{name}/repairs.sh`, `lib/repairs.sh`): {}.",
                     repairs
                         .iter()
                         .map(|r| format!("`{r}`"))

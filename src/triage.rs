@@ -216,9 +216,14 @@ impl Policy {
     }
 
     pub fn check_repairs(&self, repo: &Path) -> Result<(), PolicyError> {
-        let known = commands::registered_repairs(repo);
         for rule in &self.rules {
             if let Action::Repair(name) = &rule.action {
+                let job_dir = if rule.job == "*" {
+                    None
+                } else {
+                    Some(repo.join("jobs").join(&rule.job))
+                };
+                let known = commands::registered_repairs(repo, job_dir.as_deref());
                 if !known.iter().any(|candidate| candidate == name) {
                     return Err(PolicyError {
                         line: rule.line,

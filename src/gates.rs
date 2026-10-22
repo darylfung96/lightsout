@@ -16,8 +16,8 @@ use crate::repo;
 
 const USAGE: &str = "usage: lightsout gate <gate> [options]
 
-gates: contains duration exists loudness manifest memory never permalink
-       resolution sections
+gates: contains duration exists loudness memory never permalink
+       resolution sections shots
 
 options: --file PATH --files CSV --url URL --text TEXT --require CSV
          --min F --max F --min-words N --max-words N --w N --h N
@@ -433,31 +433,31 @@ fn last_lufs(stderr: &str) -> Option<f64> {
     found
 }
 
-fn manifest(opts: &Opts) -> (bool, String) {
+fn shots(opts: &Opts) -> (bool, String) {
     let bytes = match fs::read(&opts.path) {
         Ok(bytes) => bytes,
         Err(e) => return (false, py_os_error(&opts.path, &e)),
     };
-    let shots: Value = match serde_json::from_slice(&bytes) {
+    let parsed: Value = match serde_json::from_slice(&bytes) {
         Ok(value) => value,
         Err(e) => return (false, format!("{} is not valid JSON: {e}", opts.path)),
     };
-    let Value::Array(shots) = shots else {
+    let Value::Array(entries) = parsed else {
         return (false, format!("{} is not a list of shots", opts.path));
     };
     let want = opts.min as i64;
-    let plural = if shots.len() == 1 { "" } else { "s" };
-    if (shots.len() as i64) < want {
+    let plural = if entries.len() == 1 { "" } else { "s" };
+    if (entries.len() as i64) < want {
         return (
             false,
-            format!("{} shot{plural}, want at least {want}", shots.len()),
+            format!("{} shot{plural}, want at least {want}", entries.len()),
         );
     }
-    if shots.is_empty() {
+    if entries.is_empty() {
         return (false, format!("{} lists no shots", opts.path));
     }
 
-    for (i, entry) in shots.iter().enumerate() {
+    for (i, entry) in entries.iter().enumerate() {
         let Value::Object(entry) = entry else {
             return (false, format!("shot {} is not an object", i + 1));
         };
@@ -465,7 +465,7 @@ fn manifest(opts: &Opts) -> (bool, String) {
             return (false, format!("{} is not approved", who(entry, i)));
         }
     }
-    for (i, entry) in shots.iter().enumerate() {
+    for (i, entry) in entries.iter().enumerate() {
         let Value::Object(entry) = entry else {
             continue;
         };
@@ -485,7 +485,7 @@ fn manifest(opts: &Opts) -> (bool, String) {
             );
         }
     }
-    (true, format!("{} shot{plural} approved", shots.len()))
+    (true, format!("{} shot{plural} approved", entries.len()))
 }
 
 fn who(entry: &serde_json::Map<String, Value>, i: usize) -> String {
@@ -808,7 +808,7 @@ pub fn run(argv: &[String]) -> i32 {
         "duration" => duration(&opts),
         "exists" => exists(&opts),
         "loudness" => loudness(&opts),
-        "manifest" => manifest(&opts),
+        "shots" => shots(&opts),
         "memory" => memory(&opts),
         "never" => never(),
         "permalink" => permalink(&opts),
@@ -819,6 +819,7 @@ pub fn run(argv: &[String]) -> i32 {
         },
         other => {
             println!("FAIL {other}: unknown gate");
+            eprintln!("{USAGE}");
             return 64;
         }
     };

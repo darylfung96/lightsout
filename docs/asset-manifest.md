@@ -1,4 +1,4 @@
-# The asset manifest gate
+# The shots gate over the asset manifest
 
 A file existing is not evidence that it is the right file. `exists` proves a
 shot was downloaded; it cannot tell a staff badge from a cow, because relevance
@@ -29,15 +29,15 @@ staff badge and stage 3 would still begin.
 ## The gate
 
 ```sh
-bin/lightsout gate manifest --file out/shots.json --min 15
+bin/lightsout gate shots --file out/shots.json --min 15
 ```
 
 It exits `1` and names the first shot a human has to act on:
 
 ```
-FAIL manifest: shot 2 'lobby door' is not approved
-FAIL manifest: shot 4 'staff badge': /abs/path/out/footage/04.mp4 is missing or empty
-FAIL manifest: 12 shots, want at least 15
+FAIL shots: shot 2 'lobby door' is not approved
+FAIL shots: shot 4 'staff badge': /abs/path/out/footage/04.mp4 is missing or empty
+FAIL shots: 12 shots, want at least 15
 ```
 
 The video storyboard asks for fifteen shots, so stage 2 calls the gate with
@@ -62,11 +62,11 @@ storyboard shots exist to approve.
 ```sh
 u_say "stage 2: acquire footage"
 # ...write $OUT/shots.json, with approved:false on every shot it acquires...
-U_BLOCK_CLASS=judgment u_gate manifest --file "$OUT/shots.json" --min 15
+U_BLOCK_CLASS=judgment u_gate shots --file "$OUT/shots.json" --min 15
 ```
 
 `u_gate` turns a failed gate into a block: exit `2`, reason
-`gate failed: manifest --file ...`, visible in `bin/job status` and
+`gate failed: shots --file ...`, visible in `bin/job status` and
 `bin/job diagnose`. The class is `judgment` rather than the default, because the
 marker says a human must edit the artifact and re-run the gate, and the artifact
 here is the manifest. The acquiring stage writes `false` on every shot it

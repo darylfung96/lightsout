@@ -892,7 +892,12 @@ fn is_protected(path: &Path) -> bool {
     if matches!(components[0], "state" | "logs" | "lib" | "spec") {
         return true;
     }
-    if components.len() == 1 && matches!(components[0], "job.sh" | "spec.md" | "repair.allow") {
+    if components.len() == 1
+        && matches!(
+            components[0],
+            "job.sh" | "spec.md" | "repair.allow" | "repairs.sh"
+        )
+    {
         return true;
     }
     false

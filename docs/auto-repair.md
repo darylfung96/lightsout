@@ -58,7 +58,7 @@ comment, blank lines are ignored, and `*` is a wildcard.
 |---|---|
 | `human` | show the block and stop; the default when no rule matches |
 | `retry` | wait, then re-run the job once; only for a `retryable` block |
-| `repair:<name>` | run the `repair_<name>()` function from `lib/repairs.sh` |
+| `repair:<name>` | run the `repair_<name>()` function from `jobs/<job>/repairs.sh` or `lib/repairs.sh` |
 | `agent:propose` | write a proposal and stop, for a human to approve |
 | `agent:apply` | validate the proposal, apply it, and re-run the job |
 
@@ -138,8 +138,9 @@ falls back to a different model.
 
 The validator is the boundary in both modes, because the prompt can be argued
 with and a path check cannot. It accepts only relative paths under an allowlist,
-refuses `job.sh` , `spec.md` , `state/` , `logs/` , `lib/` , and `spec/` ,
-refuses symlinked path components, limits a proposal to 20 edits and 2 MiB of
+refuses `job.sh` , `spec.md` , `repairs.sh` , `state/` , `logs/` , `lib/` ,
+and `spec/` , refuses symlinked path components, limits a proposal to 20 edits
+and 2 MiB of
 text, and rejects unknown fields. An agent cannot smuggle in a shell command,
 because the proposal format has no field for one.
 

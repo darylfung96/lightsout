@@ -5,9 +5,11 @@
 # does the smallest environmental fix it can and then returns; `bin/job retry`
 # re-runs the job from the top and the same gate decides again.
 #
-#   * a repair is registered by defining `repair_<name>()` in this file —
-#     `bin/job retry` refuses every name that is not defined here, so no
-#     arbitrary command can be reached through the verb;
+#   * a repair is registered by defining `repair_<name>()` in this file or in
+#     the job's own `jobs/<name>/repairs.sh` — `bin/job retry` refuses every
+#     name defined in neither, so no arbitrary command can be reached through
+#     the verb. The job's file is sourced after this one, so it wins when both
+#     define the same name;
 #   * a repair must be idempotent: a retry may run it after a half-finished one;
 #   * a repair returns 0 when it changed (or confirmed) the world and non-zero
 #     when it could not;

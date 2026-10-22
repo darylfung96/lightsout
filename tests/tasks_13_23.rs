@@ -62,13 +62,13 @@ fn notify_stubs(s: &Sandbox) -> PathBuf {
     dir
 }
 
-fn manifest_command(s: &Sandbox, path: &str, min: Option<&str>) -> std::process::Output {
+fn shots_command(s: &Sandbox, path: &str, min: Option<&str>) -> std::process::Output {
     let mut cmd = s.command();
-    cmd.args(["gate", "manifest", "--file", path]);
+    cmd.args(["gate", "shots", "--file", path]);
     if let Some(min) = min {
         cmd.args(["--min", min]);
     }
-    cmd.output().expect("gate manifest")
+    cmd.output().expect("gate shots")
 }
 
 #[test]
@@ -683,7 +683,7 @@ fn t18_resource_locks() {
 }
 
 #[test]
-fn t19_manifest_gate() {
+fn t19_shots_gate() {
     let s = Sandbox::new("t19");
     let mut c = Checks::new(19);
     s.reset_noop();
@@ -699,7 +699,7 @@ fn t19_manifest_gate() {
         "shots.json",
         &format!(r#"[{{"shot":1,"query":"staff badge","file":"{hello}","approved":false}}]"#),
     );
-    let out = manifest_command(&s, "shots.json", Some("1"));
+    let out = shots_command(&s, "shots.json", Some("1"));
     c.check("an unapproved shot fails", 1, code(&out));
     let body = combined(&out);
     c.is_true(
@@ -714,7 +714,7 @@ fn t19_manifest_gate() {
     c.check(
         "an approved shot with its file passes",
         0,
-        code(&manifest_command(&s, "shots.json", Some("1"))),
+        code(&shots_command(&s, "shots.json", Some("1"))),
     );
 
     s.write(
@@ -723,7 +723,7 @@ fn t19_manifest_gate() {
             r#"[{{"shot":2,"query":"staff badge","file":"{shots}/nope.mp4","approved":true}}]"#
         ),
     );
-    let out = manifest_command(&s, "shots.json", Some("1"));
+    let out = shots_command(&s, "shots.json", Some("1"));
     c.check("an approved shot with no file fails", 1, code(&out));
     let body = combined(&out);
     c.is_true(
@@ -740,7 +740,7 @@ fn t19_manifest_gate() {
     c.check(
         "an empty shot file fails",
         1,
-        code(&manifest_command(&s, "shots.json", Some("1"))),
+        code(&shots_command(&s, "shots.json", Some("1"))),
     );
 
     s.write(
@@ -749,7 +749,7 @@ fn t19_manifest_gate() {
             r#"[{{"shot":1,"query":"staff badge","file":"{hello}","approved":true}},{{"shot":2,"query":"lobby door","file":"{hello}","approved":false}}]"#
         ),
     );
-    let out = manifest_command(&s, "shots.json", Some("2"));
+    let out = shots_command(&s, "shots.json", Some("2"));
     c.check("one unapproved shot fails a longer manifest", 1, code(&out));
     let body = combined(&out);
     c.is_true(
@@ -765,7 +765,7 @@ fn t19_manifest_gate() {
         "shots.json",
         &format!(r#"[{{"shot":1,"query":"staff badge","file":"{hello}","approved":true}}]"#),
     );
-    let out = manifest_command(&s, "shots.json", Some("2"));
+    let out = shots_command(&s, "shots.json", Some("2"));
     c.check("a manifest short of --min fails", 1, code(&out));
     c.is_true(
         "the failure counts the shots",
@@ -781,31 +781,31 @@ fn t19_manifest_gate() {
     c.check(
         "two approved shots meet --min",
         0,
-        code(&manifest_command(&s, "shots.json", Some("2"))),
+        code(&shots_command(&s, "shots.json", Some("2"))),
     );
 
     s.write("shots.json", "not json");
     c.check(
         "malformed manifest JSON fails",
         1,
-        code(&manifest_command(&s, "shots.json", Some("1"))),
+        code(&shots_command(&s, "shots.json", Some("1"))),
     );
     c.check(
         "a missing manifest fails",
         1,
-        code(&manifest_command(&s, "shots/nope.json", Some("1"))),
+        code(&shots_command(&s, "shots/nope.json", Some("1"))),
     );
     s.write("shots.json", "[]");
     c.check(
         "an empty manifest fails",
         1,
-        code(&manifest_command(&s, "shots.json", None)),
+        code(&shots_command(&s, "shots.json", None)),
     );
     s.write("shots.json", "{\"shot\":1}\n");
     c.check(
         "a manifest that is not a list fails",
         1,
-        code(&manifest_command(&s, "shots.json", None)),
+        code(&shots_command(&s, "shots.json", None)),
     );
     c.finish(19);
 }

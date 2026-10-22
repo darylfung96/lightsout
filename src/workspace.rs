@@ -66,9 +66,9 @@ const TRIAGE_CONF: &str = "\
 # LightsOut triage policy. One rule per line: <job> <source> <action>.
 # A missing file routes every block to a human; this sample is safe.
 #
-#   *                  lock           repair:stale-marker
-#   everyday-laws      gate:duration  agent:apply
-#   everyday-laws      gate:sections  agent:propose
+#   example-job        gate:duration  agent:apply
+#   example-job        gate:sections  agent:propose
+#   example-job        *              retry
 #
 # Actions: human, retry, repair:<name>, agent:propose, agent:apply.
 # Precedence: exact, then (job, *), then (*, source), then (*, *).
@@ -84,7 +84,7 @@ const AGENTS_CONF: &str = "\
 #
 # [default]
 # runner = dsh
-# patch = ~/programming/video-automation/automation/headless.patch.yml
+# patch = ~/path/to/agent.patch.yml
 ";
 const NOOP_JOB: &str = include_str!("../jobs/noop/job.sh");
 const SCHEMA: &str = include_str!("../spec/SCHEMA.md");

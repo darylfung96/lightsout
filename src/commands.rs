@@ -457,27 +457,37 @@ fn notify(repo: &Path, alerts: &Path, check_log: &Path, title: &str, body: &str)
     let _ = cmd.status();
 }
 
-/// The allowlist is the set of `repair_<name>()` functions in `lib/repairs.sh`.
-pub(crate) fn registered_repairs(repo: &Path) -> Vec<String> {
-    let mut names = Vec::new();
-    let body = state::read_lossy(&repo.join("lib").join("repairs.sh"));
-    for line in body.lines() {
-        let Some(rest) = line.strip_prefix("repair_") else {
-            continue;
-        };
-        let Some(open) = rest.find('(') else {
-            continue;
-        };
-        let name = &rest[..open];
-        if name.is_empty()
-            || !name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        {
-            continue;
-        }
-        if rest[open..].trim_start().starts_with("()") {
-            names.push(name.to_string());
+/// The allowlist is the set of `repair_<name>()` functions a job may run: the
+/// job's own `repairs.sh` plus `lib/repairs.sh`. The job's file is sourced
+/// second, so its definition wins when both name the same repair.
+pub(crate) fn registered_repairs(repo: &Path, job_dir: Option<&Path>) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut files = vec![repo.join("lib").join("repairs.sh")];
+    if let Some(dir) = job_dir {
+        files.push(dir.join("repairs.sh"));
+    }
+    for file in files {
+        let body = state::read_lossy(&file);
+        for line in body.lines() {
+            let Some(rest) = line.strip_prefix("repair_") else {
+                continue;
+            };
+            let Some(open) = rest.find('(') else {
+                continue;
+            };
+            let name = &rest[..open];
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            {
+                continue;
+            }
+            if rest[open..].trim_start().starts_with("()")
+                && !names.iter().any(|known| known == name)
+            {
+                names.push(name.to_string());
+            }
         }
     }
     names.sort();
@@ -558,12 +568,16 @@ pub fn retry(repo: &Path, argv: &[String]) -> i32 {
 }
 
 fn run_repair(paths: &Paths, repair: &str) -> Result<(), i32> {
-    let repairs_path = paths.repo.join("lib").join("repairs.sh");
-    if !repairs_path.is_file() {
-        eprintln!("refusing to retry: no repair registry at lib/repairs.sh");
+    let library = paths.repo.join("lib").join("repairs.sh");
+    let local = paths.dir.join("repairs.sh");
+    if !library.is_file() && !local.is_file() {
+        eprintln!(
+            "refusing to retry: no repairs.sh in lib/ or jobs/{}",
+            paths.name
+        );
         return Err(2);
     }
-    let allowed = registered_repairs(&paths.repo);
+    let allowed = registered_repairs(&paths.repo, Some(&paths.dir));
     if !allowed.iter().any(|candidate| candidate.as_str() == repair) {
         println!("refusing unknown repair: {repair}");
         println!(
@@ -618,7 +632,12 @@ fn run_repair(paths: &Paths, repair: &str) -> Result<(), i32> {
     );
     let mut cmd = Command::new("bash");
     cmd.arg("-c")
-        .arg(r#"set -euo pipefail; . "$REPO/lib/repairs.sh"; "repair_$1""#)
+        .arg(
+            r#"set -euo pipefail
+if [ -f "$REPO/lib/repairs.sh" ]; then . "$REPO/lib/repairs.sh"; fi
+if [ -f "$JOB_DIR/repairs.sh" ]; then . "$JOB_DIR/repairs.sh"; fi
+"repair_$1""#,
+        )
         .arg("lightsout")
         .arg(repair);
     cmd.env("REPO", &paths.repo)
