@@ -199,6 +199,31 @@ pub fn max_auto_attempts() -> Result<usize, String> {
     }
 }
 
+pub const DEFAULT_RETRY_BACKOFF: u64 = 30;
+pub const MAX_RETRY_BACKOFF: u64 = 600;
+
+/// Seconds a policy `retry` action waits before rerunning the job.
+///
+/// A transient upstream error is often gone within seconds, but a scheduler
+/// must not inherit an unbounded sleep from its environment, so the value is
+/// capped and an invalid one is a configuration error rather than a default.
+pub fn retry_backoff() -> Result<u64, String> {
+    match env::var("LIGHTSOUT_RETRY_BACKOFF") {
+        Ok(value) if !value.is_empty() => {
+            let seconds = value
+                .parse::<u64>()
+                .map_err(|_| "LIGHTSOUT_RETRY_BACKOFF must be a whole number".to_string())?;
+            if seconds > MAX_RETRY_BACKOFF {
+                return Err(format!(
+                    "LIGHTSOUT_RETRY_BACKOFF must be at most {MAX_RETRY_BACKOFF} seconds"
+                ));
+            }
+            Ok(seconds)
+        }
+        _ => Ok(DEFAULT_RETRY_BACKOFF),
+    }
+}
+
 pub const DEFAULT_AGENT_TIMEOUT: u64 = 600;
 
 pub const SCHEMA_TEXT: &str =

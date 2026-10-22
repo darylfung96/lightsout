@@ -257,6 +257,22 @@ u_done
     s.write("jobs/ready/job.sh", body);
 }
 
+fn transient_job(s: &Sandbox) {
+    s.write(
+        "jobs/ready/job.sh",
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+. "$REPO/lib/guards.sh"
+u_guard_attempts
+if [ ! -f "$STATE/tried" ]; then
+  : > "$STATE/tried"
+  u_block --class retryable --source sweep "transient failure"
+fi
+u_done
+"#,
+    );
+}
+
 fn add_repair(s: &Sandbox, name: &str, body: &str) {
     s.append(
         "lib/repairs.sh",
@@ -325,6 +341,157 @@ fn auto_repair_stops_when_the_same_failure_returns() {
             .trim(),
         "1",
         "the repair ran once"
+    );
+}
+
+#[test]
+fn retry_action_reruns_a_transient_block_to_done() {
+    let s = Sandbox::new("ar-retry-pass");
+    transient_job(&s);
+    s.write("triage.conf", "ready sweep retry\n");
+
+    let out = s.run_env(
+        &["run", "ready", "--auto-repair"],
+        &[("LIGHTSOUT_RETRY_BACKOFF", "0")],
+    );
+    assert_eq!(code(&out), 0, "retry passes: {}", combined(&out));
+    assert!(!s.exists("jobs/ready/state/blocked"), "block cleared");
+
+    let history = s.read("jobs/ready/state/heal/history.tsv");
+    assert_eq!(history.lines().count(), 1, "one retry recorded: {history}");
+    assert!(history.contains("\tretry\t"), "action is retry: {history}");
+    assert!(history.contains("passed"), "verdict passed: {history}");
+
+    let runs = s.read("jobs/ready/state/runs.tsv");
+    assert_eq!(runs.lines().count(), 2, "first run and retry: {runs}");
+    assert!(
+        runs.lines().last().unwrap_or("").contains("\tretry\t"),
+        "the retry is its own verb: {runs}"
+    );
+}
+
+#[test]
+fn retry_action_stops_when_the_same_failure_returns() {
+    let s = Sandbox::new("ar-retry-noprogress");
+    ready_job(&s, true);
+    s.write("triage.conf", "ready gate:ready retry\n");
+
+    let out = s.run_env(
+        &["run", "ready", "--auto-repair"],
+        &[("LIGHTSOUT_RETRY_BACKOFF", "0")],
+    );
+    assert_eq!(code(&out), 2, "same failure stops: {}", combined(&out));
+    assert!(s.is_file("jobs/ready/state/blocked"), "block remains");
+    let history = s.read("jobs/ready/state/heal/history.tsv");
+    assert_eq!(history.lines().count(), 1, "one retry only: {history}");
+    assert!(
+        history.contains("no-progress"),
+        "verdict is no-progress: {history}"
+    );
+}
+
+#[test]
+fn retry_records_a_failed_rerun_as_failed() {
+    let s = Sandbox::new("ar-retry-failed");
+    s.write(
+        "jobs/ready/job.sh",
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+. "$REPO/lib/guards.sh"
+u_guard_attempts
+if [ ! -f "$STATE/tried" ]; then
+  : > "$STATE/tried"
+  u_block --class retryable --source sweep "transient failure"
+fi
+exit 1
+"#,
+    );
+    s.write("triage.conf", "ready sweep retry\n");
+
+    let out = s.run_env(
+        &["run", "ready", "--auto-repair"],
+        &[("LIGHTSOUT_RETRY_BACKOFF", "0")],
+    );
+    assert_eq!(
+        code(&out),
+        1,
+        "the failed rerun exits 1: {}",
+        combined(&out)
+    );
+    let history = s.read("jobs/ready/state/heal/history.tsv");
+    assert!(
+        history.contains("\tfailed\t"),
+        "a non-block failure is not called repaired: {history}"
+    );
+}
+
+#[test]
+fn retry_action_leaves_a_judgment_block_alone() {
+    let s = Sandbox::new("ar-retry-judgment");
+    block_noop(&s, "judgment", "gate:exists");
+    s.write("triage.conf", "noop gate:exists retry\n");
+
+    let out = s.run_env(
+        &["run", "noop", "--auto-repair"],
+        &[("LIGHTSOUT_RETRY_BACKOFF", "0")],
+    );
+    assert_eq!(code(&out), 2, "judgment block exits 2: {}", combined(&out));
+    assert!(
+        combined(&out).contains("not retryable"),
+        "the refusal is explained: {}",
+        combined(&out)
+    );
+    assert!(
+        !s.exists("jobs/noop/state/heal/history.tsv"),
+        "no retry for a judgment block"
+    );
+}
+
+#[test]
+fn retry_rejects_an_invalid_backoff() {
+    let s = Sandbox::new("ar-retry-backoff");
+    ready_job(&s, true);
+    s.write("triage.conf", "ready gate:ready retry\n");
+
+    let out = s.run_env(
+        &["run", "ready", "--auto-repair"],
+        &[("LIGHTSOUT_RETRY_BACKOFF", "soon")],
+    );
+    assert_eq!(code(&out), 64, "bad backoff is a config error");
+    assert!(
+        combined(&out).contains("LIGHTSOUT_RETRY_BACKOFF"),
+        "the setting is named: {}",
+        combined(&out)
+    );
+}
+
+#[test]
+fn triage_reports_the_retry_action() {
+    let s = Sandbox::new("ar-retry-triage");
+    block_noop(&s, "retryable", "sweep");
+    s.write("triage.conf", "noop sweep retry\n");
+
+    let row = triage_json(&s);
+    assert_eq!(action(&row), "retry");
+    assert_eq!(row.get("mode").and_then(Value::as_str), Some("retry"));
+}
+
+#[test]
+fn heal_reports_a_retry_policy_without_running_the_job() {
+    let s = Sandbox::new("ar-retry-heal");
+    block_noop(&s, "retryable", "sweep");
+    s.write("triage.conf", "noop sweep retry\n");
+
+    let out = s.run(&["heal", "noop"]);
+    assert_eq!(code(&out), 2, "heal leaves a retry to the scheduler");
+    assert!(
+        combined(&out).contains("run noop --auto-repair"),
+        "heal names the scheduler path: {}",
+        combined(&out)
+    );
+    assert!(
+        !s.exists("jobs/noop/state/heal/history.tsv"),
+        "heal must not record a retry"
     );
 }
 

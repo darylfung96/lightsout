@@ -305,6 +305,172 @@ fn status_calls_a_failed_run_failed_and_rejects_an_unknown_name() {
 }
 
 #[test]
+fn a_run_from_an_earlier_unit_is_not_never_run() {
+    let s = Sandbox::new("rf-ran-state");
+    s.reset_noop();
+    assert_eq!(code(&s.run(&["run", "noop"])), 0);
+    // Next midnight: `done` is keyed to today's unit, so yesterday's marker no
+    // longer explains the row while the history still records the run.
+    let _ = fs::remove_file(s.path(&format!("jobs/noop/state/done/{}", s.today())));
+
+    let row = s.row("noop");
+    let want = format!("ran {}", s.today());
+    assert_eq!(
+        row.get("state").and_then(|v| v.as_str()),
+        Some(want.as_str()),
+        "a completed run is not never-run: {row}"
+    );
+    assert_eq!(row.get("last_exit").and_then(|v| v.as_i64()), Some(0));
+    assert_eq!(row.get("since"), row.get("last_run"), "since names the run");
+    assert!(
+        row.get("last_duration").and_then(|v| v.as_i64()).is_some(),
+        "the run still has a duration: {row}"
+    );
+
+    let page = s.run(&["report", "--html", "out/state.html"]);
+    assert_eq!(code(&page), 0, "report: {}", combined(&page));
+    let body = s.read("out/state.html");
+    assert!(
+        body.contains(&format!("<td>{want}</td>")),
+        "the page says the same thing: {body}"
+    );
+    assert!(
+        body.contains("<tr class='ran'>"),
+        "the ran row is still styled: {body}"
+    );
+}
+
+#[test]
+fn status_separates_todays_attempts_from_the_total() {
+    let s = Sandbox::new("rf-attempt-total");
+    s.reset_noop();
+    s.write("jobs/noop/state/attempts/2026-10-01.attempt-1", "");
+    s.write("jobs/noop/state/attempts/2026-10-01.attempt-2", "");
+    s.write(
+        &format!("jobs/noop/state/attempts/{}.attempt-1", s.today()),
+        "",
+    );
+    // A stage's counter is its own and must not inflate the job's.
+    s.write(
+        &format!("jobs/noop/state/attempts/{}.write.attempt-1", s.today()),
+        "",
+    );
+
+    let row = s.row("noop");
+    assert_eq!(
+        row.get("attempts_today").and_then(|v| v.as_i64()),
+        Some(1),
+        "only today's job attempt counts: {row}"
+    );
+    assert_eq!(
+        row.get("attempts_total").and_then(|v| v.as_i64()),
+        Some(3),
+        "the total survives midnight: {row}"
+    );
+}
+
+#[test]
+fn a_hold_does_not_hide_the_last_work_duration() {
+    let s = Sandbox::new("rf-work-duration");
+    s.reset_noop();
+    let today = s.today();
+    // The work row's start is older than the done marker's mtime and the hold
+    // row's is newer, so the newest row reads as a hold and the one before it
+    // as the work it already did.
+    s.write(
+        "jobs/noop/state/runs.tsv",
+        &format!(
+            "2019-12-31T00:00:00+0000\t2019-12-31T00:00:05+0000\t0\trun\t{today}\t5\n\
+             2020-01-03T00:00:00+0000\t2020-01-03T00:00:00+0000\t0\trun\t{today}\t0\n"
+        ),
+    );
+    s.write(
+        "jobs/noop/state/last",
+        &format!("{today}T00:00:00+0000\t0\trun\n"),
+    );
+    s.touch(&format!("jobs/noop/state/done/{today}"));
+    let touched = s
+        .external("touch")
+        .arg("-t")
+        .arg("202001011200")
+        .arg(s.path(&format!("jobs/noop/state/done/{today}")))
+        .status()
+        .expect("touch");
+    assert!(touched.success(), "the done marker keeps its old mtime");
+
+    let row = s.row("noop");
+    assert_eq!(
+        row.get("last_duration").and_then(|v| v.as_i64()),
+        Some(0),
+        "the newest run is the hold: {row}"
+    );
+    assert_eq!(
+        row.get("last_work_duration").and_then(|v| v.as_i64()),
+        Some(5),
+        "the work that preceded it keeps its time: {row}"
+    );
+
+    let page = s.run(&["report", "--html", "out/duration.html"]);
+    assert_eq!(code(&page), 0, "report: {}", combined(&page));
+    assert!(
+        s.read("out/duration.html").contains("(work 5s)"),
+        "the page names the work time beside the hold"
+    );
+}
+
+#[test]
+fn status_detail_answers_what_a_job_is_and_when_it_runs() {
+    let s = Sandbox::new("rf-status-detail");
+    write_job(
+        &s,
+        "brief",
+        "#!/usr/bin/env bash\nset -euo pipefail\n. \"$REPO/lib/guards.sh\"\n\
+         u_say \"stage 1: gather\"\nu_done\n",
+    );
+    s.write(
+        "jobs/brief/spec.md",
+        r#"# brief — spec
+
+deliverable
+: A one-page brief every morning.
+
+cadence
+: Daily at 07:30.
+
+stages
+: 1. gather — read the queue
+  2. write — render the page
+"#,
+    );
+    s.write("jobs/brief/state/expect", "07:30\n");
+    assert_eq!(code(&s.run(&["run", "brief"])), 0);
+
+    let out = s.run(&["status", "brief"]);
+    assert_eq!(code(&out), 0, "{}", combined(&out));
+    let text = String::from_utf8_lossy(&out.stdout);
+    for needle in [
+        "brief — done today",
+        "A one-page brief every morning.",
+        "Daily at 07:30.",
+        "07:30 (state/expect) — cron 30 7 * * *",
+        "what it does",
+        "1. gather",
+        "2. write",
+        "last runs",
+        "lightsout plan brief",
+    ] {
+        assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
+    }
+
+    let all = s.run(&["status", "--detail"]);
+    assert_eq!(code(&all), 0, "{}", combined(&all));
+    assert!(
+        String::from_utf8_lossy(&all.stdout).contains("brief — done today"),
+        "every job gets a block"
+    );
+}
+
+#[test]
 fn plan_does_not_run_the_memory_pass() {
     let s = Sandbox::new("rf-plan-memory");
     let log = s.path("memory.log");

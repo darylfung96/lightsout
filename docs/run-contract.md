@@ -23,9 +23,9 @@ read-only mode that reports what `run` would decide.
 
 ## Triage policy
 
-`triage.conf` at the workspace root maps `(job, source)` to one of four
-actions — `human`, `repair:<name>`, `agent:propose` or `agent:apply`; a human
-edits the file and the manager only reads it. Write one rule per line,
+`triage.conf` at the workspace root maps `(job, source)` to one of five
+actions — `human`, `retry`, `repair:<name>`, `agent:propose` or `agent:apply`; a
+human edits the file and the manager only reads it. Write one rule per line,
 whitespace-separated; `#` starts a comment and `*` is a wildcard. Resolution
 tries exact `(job, source)`, then `(job, *)`, then `(*, source)`, then
 `(*, *)`; the first match wins and a duplicate exact rule is a config error. A
@@ -52,6 +52,7 @@ loop because the fix did not move the failure.
 | `MAX_HEALS_TOTAL` | agent calls per workspace per day | 5 |
 | `MAX_AUTO_ATTEMPTS` | attempts per invocation | 3 |
 | `MAX_REPAIRS` | deterministic repairs per job per day | 2 |
+| `LIGHTSOUT_RETRY_BACKOFF` | seconds before a policy `retry` reruns | 30 |
 | `U_AGENT_TIMEOUT` | seconds per runner call | 600 |
 | `U_RUNNER` | the job's adapter (`dsh`, `claude`, `codex`, `fake`) | profile or `dsh` |
 | `U_HEAL_RUNNER` | the repair adapter; overrides `U_RUNNER` for a heal | profile or `dsh` |
@@ -162,12 +163,12 @@ so a human can read what happened without disturbing the stop. Because only a
 human (`unblock`) or a passing run (`u_done`) may clear the marker, diagnose
 never clears it and never runs a repair; its report is the only file it writes.
 
-The blocked line's class says what may be done about it: `retryable` (an
-allowlisted repair may fix it, so `job retry` is offered), `judgment` (a human
-must edit the artifact and re-run the gate), or `human` (credentials, disk, a
-decision). `source` names what raised the block and defaults to `unknown`. A
-two-field line written by an older run reads as `human` with field 2 as the
-reason. `bin/job run` and `resume` accept `--class C --source S` to set the
+The blocked line's class says what may be done about it: `retryable` (a policy
+`retry` or an allowlisted repair may fix it, so `run --auto-repair` or
+`job retry` is offered), `judgment` (a human must edit the artifact and re-run
+the gate), or `human` (credentials, disk, a decision). `source` names what
+raised the block and defaults to `unknown`. A two-field line written by an older
+run reads as `human` with field 2 as the reason. `bin/job run` and `resume` accept `--class C --source S` to set the
 default for every block raised during that run.
 
 A repair runs through `job retry` after two checks, because a repair executes
@@ -235,10 +236,36 @@ seconds so that one damaged file cannot remove a run from the history.
 
 `status --json` reports the last ten runs as `runs`, oldest first, each with
 `start`, `end`, `rc`, `verb`, `unit` and `seconds`, plus the newest run's
-integer `last_duration` (or `null` before the first run). The HTML table from
-`lightsout report --html` adds `duration` and `last 5 runs`, because the page is read
-by a person scanning for a run that got slower and the file keeps the full
-history.
+integer `last_duration` (or `null` before the first run). `last_work_duration`
+is the newest run that was not a deliberate hold, because a hold exits 0 without
+writing `done/<unit>`: a `last_duration` of 0 beside a real history is a held
+tick, not a job that did nothing for no time. Attempts are reported both ways,
+because the cap is a day: `attempts_today` counts this day's `<date>.attempt-N`
+files and `attempts_total` counts every one on disk, so the page cannot read
+"0 attempts" for a job that has two. The HTML table from
+`lightsout report --html` adds `duration`, `last 5 runs` and an
+`attempts today / total` cell, because the page is read by a person scanning for
+a run that got slower and the file keeps the full history; the `duration` cell
+names the work time in parentheses when the newest tick was a hold.
+
+Give `lightsout status` a job name and it prints that job's block in place of
+its table row, because one row cannot carry a spec and five runs; `--detail`
+asks for one block per job. The block is still read from files: the `spec.md`
+summary, `cadence` and `unit`, the `stages` list (or the `## What a run does`
+section), the `state/expect` time with its cron prefix, the pinned agent
+profile, the last five runs, attempts, outputs, and the commands that would
+plan, run or diagnose it. It names `lightsout plan <name>` instead of running
+it, because `plan` executes `job.sh` in dry mode and `status` must not start a
+job to describe one. A spec written in a third shape still yields its title and
+first paragraph, so the reader gets prose rather than an error.
+
+The state column is computed from the files, so it says `blocked`, `running`,
+`failed`, `done today` or `ran <date>` for the last completed run, and it says
+`never run` only when `state/last`, `runs.tsv` and the log's stage lines are all
+silent. Because `done/<unit>` belongs to the unit and not to the run, a job that
+finished yesterday has no marker today, so without `ran` its row would fall
+back to `never run` while its own `last run`, duration and history said
+otherwise.
 
 ## Resource locks
 

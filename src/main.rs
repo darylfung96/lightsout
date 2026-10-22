@@ -10,6 +10,7 @@ mod heal;
 mod registry;
 mod repo;
 mod schedule;
+mod spec;
 mod state;
 mod status;
 mod triage;
@@ -20,9 +21,31 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 fn main() {
+    restore_sigpipe();
     let argv: Vec<String> = std::env::args().skip(1).collect();
     process::exit(run(&argv));
 }
+
+/// Rust ignores `SIGPIPE`, so a reader that closes early (`status | head`)
+/// would make the next `println!` panic on a broken stdout. The manager prints
+/// reports a person pages through, so it restores the default action and dies
+/// quietly the way `cat` does instead of printing a panic into the pipeline.
+#[cfg(unix)]
+fn restore_sigpipe() {
+    extern "C" {
+        fn signal(sig: i32, handler: usize) -> usize;
+    }
+    const SIGPIPE: i32 = 13;
+    const SIG_DFL: usize = 0;
+    // SAFETY: only the default disposition is installed, and `signal` stores
+    // it without dereferencing anything the process owns.
+    unsafe {
+        signal(SIGPIPE, SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn restore_sigpipe() {}
 
 fn run(argv: &[String]) -> i32 {
     let mut index = 0;

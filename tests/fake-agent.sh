@@ -68,6 +68,18 @@ fi
 if [ -n "${FAKE_AGENT_TOUCH:-}" ]; then
   printf 'tampered\n' >> "$FAKE_AGENT_TOUCH"
 fi
+# A prompt-matched copy lets a test feed a stage-specific artifact (for example
+# the topic proposal) without teaching the runner what that stage is.
+if [ -n "${FAKE_AGENT_COPY_FROM:-}" ]; then
+  [ -n "${FAKE_AGENT_COPY_TO:-}" ] || {
+    echo "fake-agent: FAKE_AGENT_COPY_FROM needs FAKE_AGENT_COPY_TO" >&2
+    exit 64
+  }
+  if [ -z "${FAKE_AGENT_COPY_MATCH:-}" ] ||
+     printf '%s' "$prompt" | grep -Fq -- "$FAKE_AGENT_COPY_MATCH"; then
+    cp "$FAKE_AGENT_COPY_FROM" "$FAKE_AGENT_COPY_TO"
+  fi
+fi
 out="${FAKE_AGENT_OUT:-$prompt.out}"
 printf 'fake agent: %s\n' "${prompt##*/}" > "$out"
 printf 'fake agent: wrote %s\n' "$out"

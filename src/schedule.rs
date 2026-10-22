@@ -12,19 +12,22 @@ use crate::registry;
 use crate::repo;
 use crate::state;
 
-pub const USAGE: &str = "usage: lightsout schedule <job> [--launchd] [--at HH:MM]
+pub const USAGE: &str = "usage: lightsout schedule <job> [--launchd] [--at HH:MM] [--auto-repair]
 
 print the cron line (default) or the launchd plist that runs the job; --at
-overrides the job's state/expect time. Nothing is installed.";
+overrides the job's state/expect time and --auto-repair adds the bounded
+auto-repair flag to the printed command. Nothing is installed.";
 
 pub fn run(root: &Path, argv: &[String]) -> i32 {
     let mut name: Option<String> = None;
     let mut launchd = false;
+    let mut auto = false;
     let mut at: Option<String> = None;
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
             "--launchd" => launchd = true,
+            "--auto-repair" => auto = true,
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return 0;
@@ -81,9 +84,9 @@ pub fn run(root: &Path, argv: &[String]) -> i32 {
     };
     let binary = binary_path();
     if launchd {
-        println!("{}", plist(&name, &paths, &binary, hour, minute));
+        println!("{}", plist(&name, &paths, &binary, hour, minute, auto));
     } else {
-        println!("{}", cron(&name, &binary, hour, minute));
+        println!("{}", cron(&name, &binary, hour, minute, auto));
     }
     0
 }
@@ -111,17 +114,25 @@ fn binary_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("lightsout"))
 }
 
+/// The five cron fields for a recorded time. `status <name>` prints this same
+/// prefix, so a detail line cannot name a different trigger than the line
+/// `schedule` prints.
+pub fn cron_time(hour: u32, minute: u32) -> String {
+    format!("{minute} {hour} * * *")
+}
+
 /// The cron line runs through `/bin/sh -c`, so a path with a space is quoted
 /// for that shell rather than for crontab's field parser.
-fn cron(name: &str, binary: &Path, hour: u32, minute: u32) -> String {
+fn cron(name: &str, binary: &Path, hour: u32, minute: u32, auto: bool) -> String {
     format!(
         "# {name} — from state/expect ({hour:02}:{minute:02}); paste into crontab -e\n\
-         {minute} {hour} * * * {}",
-        cron_command(name, binary)
+         {} {}",
+        cron_time(hour, minute),
+        cron_command(name, binary, auto)
     )
 }
 
-fn cron_command(name: &str, binary: &Path) -> String {
+fn cron_command(name: &str, binary: &Path, auto: bool) -> String {
     let mut parts = Vec::new();
     if let Ok(home) = env::var("LIGHTSOUT_HOME") {
         if !home.is_empty() {
@@ -131,13 +142,28 @@ fn cron_command(name: &str, binary: &Path) -> String {
     parts.push(shell_quote(&binary.to_string_lossy()));
     parts.push("run".into());
     parts.push(shell_quote(name));
+    if auto {
+        parts.push("--auto-repair".into());
+    }
     parts.join(" ")
 }
 
-fn plist(name: &str, paths: &repo::Paths, binary: &Path, hour: u32, minute: u32) -> String {
+fn plist(
+    name: &str,
+    paths: &repo::Paths,
+    binary: &Path,
+    hour: u32,
+    minute: u32,
+    auto: bool,
+) -> String {
     let home = registry::home();
     let log = home.join("logs").join(format!("{name}.log"));
     let workdir = paths.workdir.clone().unwrap_or_else(|| paths.dir.clone());
+    let auto_arg = if auto {
+        "    <string>--auto-repair</string>\n"
+    } else {
+        ""
+    };
     let mut environment = format!(
         "    <key>HOME</key>\n    <string>{}</string>\n    <key>PATH</key>\n    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>\n",
         xml_escape(&env::var("HOME").unwrap_or_default())
@@ -158,7 +184,7 @@ fn plist(name: &str, paths: &repo::Paths, binary: &Path, hour: u32, minute: u32)
          \x20   <string>{binary}</string>\n\
          \x20   <string>run</string>\n\
          \x20   <string>{name}</string>\n\
-         \x20 </array>\n\
+         {auto_arg}\x20 </array>\n\
          \x20 <key>WorkingDirectory</key>\n\
          \x20 <string>{workdir}</string>\n\
          \x20 <key>StartCalendarInterval</key>\n\
@@ -181,6 +207,7 @@ fn plist(name: &str, paths: &repo::Paths, binary: &Path, hour: u32, minute: u32)
         binary = xml_escape(&binary.to_string_lossy()),
         workdir = xml_escape(&workdir.to_string_lossy()),
         log = xml_escape(&log.to_string_lossy()),
+        auto_arg = auto_arg,
     )
 }
 
@@ -218,9 +245,31 @@ mod tests {
 
     #[test]
     fn the_cron_line_is_one_shell_command() {
-        let line = cron("backup", Path::new("/usr/local/bin/lightsout"), 2, 30);
+        let line = cron(
+            "backup",
+            Path::new("/usr/local/bin/lightsout"),
+            2,
+            30,
+            false,
+        );
         assert!(line.contains("30 2 * * *"));
         assert!(line.contains("/usr/local/bin/lightsout run backup"));
         assert!(!line.contains("--workspace"));
+        assert!(!line.contains("--auto-repair"));
+
+        let auto = cron("backup", Path::new("/usr/local/bin/lightsout"), 2, 30, true);
+        assert!(auto.contains("/usr/local/bin/lightsout run backup --auto-repair"));
+    }
+
+    #[test]
+    fn the_plist_can_enable_auto_repair() {
+        let paths = repo::Paths::new(Path::new("/tmp/office"), "backup");
+        let binary = Path::new("/usr/local/bin/lightsout");
+
+        let plain = plist("backup", &paths, binary, 2, 30, false);
+        assert!(!plain.contains("--auto-repair"));
+
+        let armed = plist("backup", &paths, binary, 2, 30, true);
+        assert!(armed.contains("<string>--auto-repair</string>"));
     }
 }

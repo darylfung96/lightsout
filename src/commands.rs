@@ -26,7 +26,9 @@ pub const USAGE: &str = "usage: lightsout [--workspace DIR] <verb> [name]
                        --home initializes $LIGHTSOUT_HOME for registered jobs
   doctor               check the workspace and the tools its jobs need
   list                 jobs that exist, in the workspace and the registry
-  status [name]        state from files; --json for machines
+  status [name] [--detail]
+                       state from files (the table); a name or --detail prints
+                       the spec, schedule, stages and runs; --json for machines
   report [--html PATH] the dashboard page (same data as status)
   check [name]         alarm when an expected run never happened: notifies once
                        per job per day and exits 2 if a missed run is blocked
@@ -54,7 +56,7 @@ pub const USAGE: &str = "usage: lightsout [--workspace DIR] <verb> [name]
   unblock <name>       clear a blocked marker after a human looks
   job add|list|remove  the global registry: a job directory outside a workspace
                        (see lightsout job --help)
-  schedule <name> [--launchd] [--at HH:MM]
+  schedule <name> [--launchd] [--at HH:MM] [--auto-repair]
                        print the cron line or launchd plist that runs the job
   gate <gate> [opts]   artifact gates (see lightsout gate --help)
   version              print the binary version
@@ -765,47 +767,59 @@ fn heal_loop(
                     return code;
                 }
                 attempts += 1;
-                let rc = run_job(repo, &paths.name, "run", false, None, None, true);
-                let next = state::blocked_marker(&paths.state.join("blocked"));
-                let after_key = next
-                    .as_ref()
-                    .map(triage::failure_key)
-                    .unwrap_or_else(|| "done".to_string());
-                let verdict = if rc == 2 && after_key == before_key {
-                    "no-progress"
-                } else if rc == 0 {
-                    "passed"
-                } else {
-                    "repaired"
-                };
-                heal::record_attempt(
-                    paths,
-                    &attempt,
-                    &heal::Record {
-                        action: &action,
-                        before_key: &before_key,
-                        after_key: &after_key,
-                        verdict,
-                        rc,
-                        cost: None,
-                        agent: None,
-                    },
-                );
-                if rc != 2 {
-                    return rc;
+                match finish_loop_attempt(repo, paths, &attempt, "run", &action, &before_key) {
+                    LoopOutcome::Finished(rc) => return rc,
+                    LoopOutcome::NoProgress => {
+                        println!(
+                            "auto-repair: {} failed the same way after the repair; stopping",
+                            paths.name
+                        );
+                        return 2;
+                    }
+                    LoopOutcome::Moved(next) => {
+                        blocked = next;
+                        continue;
+                    }
                 }
-                if after_key == before_key {
+            }
+            triage::Action::Retry => {
+                let backoff = match heal::retry_backoff() {
+                    Ok(seconds) => seconds,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return 64;
+                    }
+                };
+                if backoff > 0 {
                     println!(
-                        "auto-repair: {} failed the same way after the repair; stopping",
+                        "auto-repair: {} will retry in {backoff}s (policy: retry)",
                         paths.name
                     );
-                    return 2;
+                    std::thread::sleep(std::time::Duration::from_secs(backoff));
                 }
-                blocked = match next {
-                    Some(next) => next,
-                    None => return 2,
+                let attempt = match heal::begin_attempt(paths) {
+                    Ok(attempt) => attempt,
+                    Err(error) => {
+                        eprintln!("auto-repair: {error}");
+                        return 2;
+                    }
                 };
-                continue;
+                lock.refresh();
+                attempts += 1;
+                match finish_loop_attempt(repo, paths, &attempt, "retry", "retry", &before_key) {
+                    LoopOutcome::Finished(rc) => return rc,
+                    LoopOutcome::NoProgress => {
+                        println!(
+                            "auto-repair: {} failed the same way after the retry; stopping",
+                            paths.name
+                        );
+                        return 2;
+                    }
+                    LoopOutcome::Moved(next) => {
+                        blocked = next;
+                        continue;
+                    }
+                }
             }
             triage::Action::AgentPropose => {
                 return agent_attempt(repo, paths, &blocked, "agent:propose", lock, false);
@@ -832,6 +846,65 @@ fn heal_loop(
                 continue;
             }
         }
+    }
+}
+
+enum LoopOutcome {
+    Finished(i32),
+    NoProgress,
+    Moved(state::Blocked),
+}
+
+/// Rerun the job after a policy action and record what the rerun decided.
+///
+/// `action` is the history label (`retry` or `repair:<name>`), while `verb` is
+/// what `state/runs.tsv` records. The failure key is the only evidence of
+/// progress: a different key moves the loop, and the same key stops it.
+fn finish_loop_attempt(
+    repo: &Path,
+    paths: &Paths,
+    attempt: &heal::Attempt,
+    verb: &str,
+    action: &str,
+    before_key: &str,
+) -> LoopOutcome {
+    let rc = run_job(repo, &paths.name, verb, false, None, None, true);
+    let next = state::blocked_marker(&paths.state.join("blocked"));
+    let after_key = next
+        .as_ref()
+        .map(triage::failure_key)
+        .unwrap_or_else(|| "done".to_string());
+    let verdict = if rc == 2 && after_key == before_key {
+        "no-progress"
+    } else if rc == 0 {
+        "passed"
+    } else if rc == 2 {
+        "repaired"
+    } else {
+        "failed"
+    };
+    heal::record_attempt(
+        paths,
+        attempt,
+        &heal::Record {
+            action,
+            before_key,
+            after_key: &after_key,
+            verdict,
+            rc,
+            cost: None,
+            agent: attempt.agent.as_deref(),
+        },
+    );
+    if rc != 2 {
+        return LoopOutcome::Finished(rc);
+    }
+    if after_key == before_key {
+        return LoopOutcome::NoProgress;
+    }
+    match next {
+        Some(next) => LoopOutcome::Moved(next),
+        None => LoopOutcome::Finished(2),
     }
 }
 
@@ -1358,6 +1431,13 @@ pub fn heal(repo: &Path, argv: &[String]) -> i32 {
                 decision
                     .note
                     .unwrap_or_else(|| "no rule matched".to_string())
+            );
+            2
+        }
+        triage::Action::Retry => {
+            println!(
+                "heal: the policy routes {} to retry; use: lightsout run {} --auto-repair",
+                paths.name, paths.name
             );
             2
         }

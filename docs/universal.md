@@ -27,7 +27,10 @@ the current directory does not have to be a workspace.
 
 `list`, `check` and `status` show the union of workspace jobs and registered
 jobs, and a name that exists in both appears once because the workspace
-definition wins.
+definition wins. Somewhere that is not a workspace, the workspace half of that
+union is empty, so a job appears only after `job add` names it: registering
+`<workspace>/jobs/<name>` with `--job-dir` is the step that makes a job the
+workspace already has visible from every other directory.
 
 ## `job add`
 
@@ -75,8 +78,9 @@ memory and auto-repair stay opt-in; edit the generated file to add them, and
 
 `lightsout schedule <name>` prints the cron line for the job's `state/expect`
 time, or for `--at HH:MM` when the job has no schedule, so the trigger stays
-outside LightsOut. `--launchd` prints a plist instead, and nothing is
-installed.
+outside LightsOut. `--launchd` prints a plist instead, and `--auto-repair`
+adds that flag to either form for a job whose policy uses a retry, repair or
+agent rule. Nothing is installed.
 
 cron, launchd, systemd or a DSH reminder still decides *when*, so a crashed
 scheduler cannot take the run history with it and LightsOut keeps one job: the

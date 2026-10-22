@@ -200,6 +200,37 @@ pub fn run_history(state: &Path, limit: usize) -> Vec<Run> {
     }
 }
 
+/// The newest run that was not a deliberate hold. A hold exits 0 without
+/// writing `done/<unit>`, so a run did work when its unit's marker was written
+/// at or after the run began, or when it failed at all. The scan stops at the
+/// newest row that passes, because a later work run rewrote the marker and an
+/// older row's timestamp would then read the newer write.
+pub fn last_work_run<'a>(state: &Path, runs: &'a [Run]) -> Option<&'a Run> {
+    runs.iter()
+        .rev()
+        .find(|run| run.rc != 0 || wrote_done(state, run))
+}
+
+fn wrote_done(state: &Path, run: &Run) -> bool {
+    // The unit is a filename from a TSV line: refuse anything that would walk
+    // out of `done/`, because the test below would then describe another file.
+    if run.unit.is_empty() || run.unit == "." || run.unit == ".." || run.unit.contains(['/', '\\'])
+    {
+        return false;
+    }
+    let Some(start) = clock::parse_civil(&run.start).and_then(|civil| civil.epoch()) else {
+        return false;
+    };
+    let Ok(modified) = fs::metadata(state.join("done").join(&run.unit)).and_then(|m| m.modified())
+    else {
+        return false;
+    };
+    modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .is_ok_and(|at| at >= start)
+}
+
 pub fn last_run_row(state: &Path) -> Option<(String, Option<i64>)> {
     let mut rows: Vec<String> = lines(&state.join("last"))
         .into_iter()
@@ -265,6 +296,30 @@ pub fn mtime_iso(path: &Path) -> Option<String> {
 /// Number of entries in `state/attempts` beginning `<today>.attempt-`.
 pub fn attempts_today(state: &Path, today: &str) -> i64 {
     count_matching(&state.join("attempts"), &format!("{today}.attempt-"))
+}
+
+/// Every job attempt on disk: `state/attempts/<date>.attempt-N`. A stage's
+/// file is `<date>.<id>.attempt-N`, a different counter, so a second dot before
+/// `attempt-` disqualifies the name.
+pub fn attempts_total(state: &Path) -> i64 {
+    let Ok(entries) = fs::read_dir(state.join("attempts")) else {
+        return 0;
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter(|entry| is_day_attempt(&entry.file_name().to_string_lossy()))
+        .count() as i64
+}
+
+fn is_day_attempt(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    bytes.len() > 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[..4].iter().all(|c| c.is_ascii_digit())
+        && bytes[5..7].iter().all(|c| c.is_ascii_digit())
+        && bytes[8..10].iter().all(|c| c.is_ascii_digit())
+        && name[10..].starts_with(".attempt-")
 }
 
 fn count_matching(dir: &Path, prefix: &str) -> i64 {

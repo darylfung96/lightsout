@@ -1,6 +1,6 @@
 //! `triage.conf` — the human-edited policy that routes a blocked job.
 //!
-//! The file is a small TSV grammar with four actions. The manager reads it and
+//! The file is a small TSV grammar with five actions. The manager reads it and
 //! never writes it; `triage` prints the decision, `heal` and
 //! `run --auto-repair` consume it. A missing file is not an error: every block
 //! falls back to `human`.
@@ -23,6 +23,7 @@ pub const DEFAULT_MAX_HEALS_TOTAL: usize = 5;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     Human,
+    Retry,
     Repair(String),
     AgentPropose,
     AgentApply,
@@ -32,6 +33,7 @@ impl Action {
     pub fn label(&self) -> String {
         match self {
             Action::Human => "human".into(),
+            Action::Retry => "retry".into(),
             Action::Repair(name) => format!("repair:{name}"),
             Action::AgentPropose => "agent:propose".into(),
             Action::AgentApply => "agent:apply".into(),
@@ -41,6 +43,7 @@ impl Action {
     pub fn mode(&self) -> &'static str {
         match self {
             Action::Human => "human",
+            Action::Retry => "retry",
             Action::Repair(_) => "repair",
             Action::AgentPropose => "propose",
             Action::AgentApply => "apply",
@@ -281,6 +284,7 @@ fn validate_job(job: &str) -> Result<(), String> {
 fn parse_action(text: &str) -> Result<Action, String> {
     match text {
         "human" => Ok(Action::Human),
+        "retry" => Ok(Action::Retry),
         "agent:apply" => Ok(Action::AgentApply),
         "agent:propose" => Ok(Action::AgentPropose),
         _ => match text.strip_prefix("repair:") {
@@ -289,7 +293,7 @@ fn parse_action(text: &str) -> Result<Action, String> {
                 "repair name '{name}' must be lower-case letters, digits or dash"
             )),
             None => Err(format!(
-                "unknown action '{text}' (use human, agent:apply, agent:propose or repair:<name>)"
+                "unknown action '{text}' (use human, retry, agent:apply, agent:propose or repair:<name>)"
             )),
         },
     }
@@ -320,18 +324,23 @@ pub fn failure_key(blocked: &Blocked) -> String {
 
 pub fn decide(policy: &Policy, job: &str, blocked: &Blocked) -> Resolution {
     let mut resolution = policy.resolve(job, &blocked.source);
-    if let Action::Repair(_) = resolution.action {
+    let refused = match &resolution.action {
+        Action::Retry => Some("retry"),
+        Action::Repair(_) => Some("repair"),
+        _ => None,
+    };
+    if let Some(what) = refused {
         if blocked.class != "retryable" {
             resolution.note = Some(format!(
-                "class {} is not retryable; repair refused and human is used",
-                blocked.class
+                "class {} is not retryable; {} refused and human is used",
+                blocked.class, what
             ));
             resolution.action = Action::Human;
         }
     }
     if blocked.class == "retryable" && resolution.action.is_agent() {
         resolution.note = Some(
-            "the block is retryable and a deterministic repair may be cheaper; agent action kept"
+            "the block is retryable and a deterministic retry or repair may be cheaper; agent action kept"
                 .into(),
         );
     }
@@ -520,6 +529,7 @@ pub fn run(repo: &Path, argv: &[String]) -> i32 {
 fn next_command(name: &str, action: &Action) -> String {
     match action {
         Action::Human => format!("fix the cause, then: lightsout unblock {name}"),
+        Action::Retry => format!("lightsout run {name} --auto-repair"),
         Action::Repair(repair) => format!("lightsout retry {name} --repair {repair}"),
         Action::AgentPropose => {
             format!("review the proposal, then: lightsout heal {name} --apply")
@@ -605,5 +615,15 @@ noop gate:exists human
         let resolution = decide(&policy, "noop", &blocked("gate:exists", "bad"));
         assert_eq!(resolution.action, Action::Human);
         assert!(resolution.note.unwrap().contains("not retryable"));
+    }
+
+    #[test]
+    fn retry_is_parsed_and_refused_for_a_judgment_block() {
+        let policy = Policy::parse("triage.conf", "noop * retry\n").expect("policy");
+        assert_eq!(policy.resolve("noop", "sweep").action, Action::Retry);
+
+        let resolution = decide(&policy, "noop", &blocked("gate:exists", "bad"));
+        assert_eq!(resolution.action, Action::Human);
+        assert!(resolution.note.unwrap().contains("retry refused"));
     }
 }

@@ -20,9 +20,9 @@ This repository builds them once.
 - **An agent step** — prompt file, headless run, contract gate, staged output,
   never retried. A per-job profile pins the runner and model, and the repair
   path uses the same one. `docs/agent-step.md`
-- **Bounded auto-repair** — `triage.conf` routes a blocked job to a
-  deterministic repair, an agent proposal, an agent apply, or a human; caps,
-  validation and backups bound the attempt. `docs/auto-repair.md`
+- **Bounded auto-repair** — `triage.conf` routes a blocked job to a bounded
+  retry, a deterministic repair, an agent proposal, an agent apply, or a human;
+  caps, validation and backups bound the attempt. `docs/auto-repair.md`
 - **A memory pass** — the last stage of every job, so an unattended agent obeys
   the same replace-never-append rules a session does. `docs/memory-pass.md`
 - **Universal mode** — register a job directory by name, and `run`, `status`,

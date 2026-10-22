@@ -70,7 +70,7 @@ const TRIAGE_CONF: &str = "\
 #   everyday-laws      gate:duration  agent:apply
 #   everyday-laws      gate:sections  agent:propose
 #
-# Actions: human, repair:<name>, agent:propose, agent:apply.
+# Actions: human, retry, repair:<name>, agent:propose, agent:apply.
 # Precedence: exact, then (job, *), then (*, source), then (*, *).
 * * human
 ";

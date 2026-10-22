@@ -258,8 +258,19 @@ fn schedule_prints_the_trigger_and_installs_nothing() {
         "a registered job needs no workspace"
     );
     assert!(
+        !text.contains("--auto-repair"),
+        "auto-repair is opt-in: {text}"
+    );
+    assert!(
         !registry_home(&s).join("logs/backup.log").exists(),
         "schedule writes no log"
+    );
+
+    let out = s.run(&["schedule", "backup", "--auto-repair"]);
+    assert!(
+        stdout(&out).contains("run backup --auto-repair"),
+        "the flag reaches the cron command: {}",
+        stdout(&out)
     );
 
     let out = s.run(&["schedule", "backup", "--at", "23:59"]);
@@ -277,6 +288,17 @@ fn schedule_prints_the_trigger_and_installs_nothing() {
     );
     assert!(text.contains("<integer>7</integer>"), "{text}");
     assert!(text.contains("<integer>15</integer>"), "{text}");
+    assert!(
+        !text.contains("--auto-repair"),
+        "the plist is opt-in too: {text}"
+    );
+
+    let out = s.run(&["schedule", "backup", "--launchd", "--auto-repair"]);
+    assert!(
+        stdout(&out).contains("<string>--auto-repair</string>"),
+        "the flag reaches the plist: {}",
+        stdout(&out)
+    );
 
     assert_eq!(code(&s.run(&["schedule", "ghost"])), 64);
 }
