@@ -45,6 +45,28 @@ U_MEMORY="${U_MEMORY:-1}"
 U_MEMORY_FILES="${U_MEMORY_FILES:-notes/60-log.md}"
 export U_MEMORY U_MEMORY_FILES
 
+# Stage 1's lesson is the only bounded step in this job: stages 2-8 are one
+# driver call, and the manager waits for a job however long it runs, so a video
+# build over an hour is never killed by a timeout. An hour is the ceiling for
+# the text call alone, because a slow provider should not turn a build into a
+# blocked job; U_AGENT_TIMEOUT in the environment still wins.
+U_AGENT_TIMEOUT="${U_AGENT_TIMEOUT:-3600}"
+export U_AGENT_TIMEOUT
+
+# The queue used to be the one human input. Stage 0 tops it up: when the next
+# episode has no line, the agent proposes TOPIC_BUFFER lines into a proposal
+# file and pipeline/topic_check.py appends them only after the format, the
+# numbering and the no-duplicate rule pass. A line that already exists costs no
+# agent call.
+TOPIC_BUFFER="${TOPIC_BUFFER:-3}"
+case "$TOPIC_BUFFER" in
+  ''|*[!0-9]*) u_die "TOPIC_BUFFER must be a whole number" ;;
+esac
+[ "$TOPIC_BUFFER" -ge 1 ] && [ "$TOPIC_BUFFER" -le 9 ] \
+  || u_die "TOPIC_BUFFER must be 1-9"
+TOPIC_QUEUE="${TOPIC_QUEUE:-$VIDEO_REPO/pipeline/topic-queue.txt}"
+TOPIC_PROPOSAL="${TOPIC_PROPOSAL:-$VIDEO_REPO/pipeline/topic-proposal.txt}"
+
 # jobs/everyday-laws/agent.conf pins the same dsh patch for the lesson and for
 # the repair path; this fallback keeps a direct job.sh invocation working when
 # the manager is not in the loop. Without the patch a headless run depends on
@@ -118,6 +140,61 @@ preflight() {
   PREFLIGHT_EP="$ep"
 }
 
+# --- stage 0: the topic queue refills itself ------------------------------
+render_topics_prompt() { # render_topics_prompt <out> <start-ep> <count>
+  python3 - "$VIDEO_REPO/automation/topic-task.md" "$1" "$2" "$3" \
+    "$TOPIC_PROPOSAL" "$TOPIC_QUEUE" "$(date +%F)" <<'PY'
+import sys
+from pathlib import Path
+
+template, out, start, count, proposal, queue, run_date = sys.argv[1:8]
+text = Path(template).read_text(encoding="utf-8")
+tail = "\n".join(Path(queue).read_text(encoding="utf-8").splitlines()[-10:])
+Path(out).write_text(
+    text.replace("{{RUN_DATE}}", run_date)
+        .replace("{{START_EP}}", start)
+        .replace("{{COUNT}}", count)
+        .replace("{{OUT}}", proposal)
+        .replace("{{QUEUE_TAIL}}", tail),
+    encoding="utf-8")
+PY
+}
+
+ensure_topics() { # ensure_topics <episode>
+  local ep="$1" later prompt marker
+  if grep -q "^${ep}|" "$TOPIC_QUEUE" 2>/dev/null; then
+    return 0
+  fi
+  if [ "$DRY" = 1 ]; then
+    u_say "plan: would ask the agent for $TOPIC_BUFFER topic lines from $ep"
+    return 0
+  fi
+  # Appending is only safe at the end of the queue: a missing middle number is
+  # a queue that needs a human, not a place to insert.
+  later=$(sed -n 's/^\([0-9][0-9][0-9]\)|.*/\1/p' "$TOPIC_QUEUE" 2>/dev/null \
+    | awk -v ep="$ep" '$1+0 > ep+0 { print; exit }')
+  [ -z "$later" ] || u_block --class human --source topics \
+    "topic queue has a gap at episode $ep (episode $later exists)"
+  prompt="$STATE/topics-$ep.md"
+  marker="$prompt.done"
+  render_topics_prompt "$prompt" "$ep" "$TOPIC_BUFFER" \
+    || u_block --class human --source topics \
+       "cannot render $VIDEO_REPO/automation/topic-task.md"
+  rm -f "$TOPIC_PROPOSAL"
+  u_say "stage 0: no topic line for $ep; asking for $TOPIC_BUFFER"
+  ( cd "$VIDEO_REPO" && u_agent "$prompt" "$marker" ) \
+    || u_block --class human --source topics "topic agent failed"
+  python3 "$VIDEO_REPO/pipeline/topic_check.py" \
+    "$TOPIC_PROPOSAL" "$TOPIC_QUEUE" "$ep" "$TOPIC_BUFFER" --append \
+    || u_block --class judgment --source topics \
+       "topic proposal failed pipeline/topic_check.py"
+  grep -q "^${ep}|" "$TOPIC_QUEUE" \
+    || u_block --class human --source topics \
+       "topic queue still has no line for $ep after the refill"
+  rm -f "$TOPIC_PROPOSAL"
+  u_say "topics: added $TOPIC_BUFFER lines from episode $ep"
+}
+
 # --- stage 1's prompt -----------------------------------------------------
 render_prompt() { # render_prompt <out> <episode> <queue-line>
   python3 - "$VIDEO_REPO/automation/lesson-task.md" "$1" "$2" "$3" "$(date +%F)" <<'PY'
@@ -167,10 +244,19 @@ else
 fi
 [ -n "$ep" ] || u_block --class human --source preflight "no episode resolved"
 
-topic=$(grep -E "^${ep}\|" "$VIDEO_REPO/pipeline/topic-queue.txt" 2>/dev/null | head -1 || true)
-[ -n "$topic" ] || u_block --class human --source preflight \
-  "REFILL-TOPICS: no queue line for episode $ep"
-IFS='|' read -r _queue title obs _tone _angle <<< "$topic"
+ensure_topics "$ep"
+
+topic=$(grep -E "^${ep}\|" "$TOPIC_QUEUE" 2>/dev/null | head -1 || true)
+if [ -n "$topic" ]; then
+  IFS='|' read -r _queue title obs _tone _angle <<< "$topic"
+elif [ "$DRY" = 1 ]; then
+  # A read-only plan cannot run the agent; show the shape it would fill in.
+  title="(generated at run time)"
+  obs="OBS. $ep — THE <NOUN>"
+else
+  u_block --class human --source preflight \
+    "REFILL-TOPICS: no queue line for episode $ep"
+fi
 
 master="$VIDEO_REPO/outbox/$ep-master.mp4"
 lesson_dir="$VIDEO_REPO/episodes/$ep"
