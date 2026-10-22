@@ -36,8 +36,9 @@ This repository follows `~/agent-memory` conventions, because the memory pass an
 `memory-auto-index-policy.md` (which collection owns a fact),
 `wiki-policy.md` (page schema), `deterministic-first.md`.
 
-- The wiki is `notes/`. Update the page, `00-index.md`, and `60-log.md` on every
-  ingest; one fact, one home.
+- The wiki is `notes/` in a workspace, and this checkout is the product, so it
+  keeps none; the maintainer's is `~/programming/mac-automation/notes`. Update
+  the page, `00-index.md`, and `60-log.md` on every ingest; one fact, one home.
 - **Replace, never append.** A superseded fact is edited out in the same write
   that adds its replacement. No "update:" paragraphs, no parallel copies.
 - **Owner check before creating a page**, because two pages stating one rule

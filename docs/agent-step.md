@@ -58,11 +58,11 @@ so the lesson call and the repair that follows it use the same pin.
 # agents.conf
 [daily]
 runner = dsh
-patch = ~/programming/video-automation/automation/headless.patch.yml
+patch = ~/path/to/agent.patch.yml
 ```
 
 ```ini
-# jobs/everyday-laws/agent.conf
+# jobs/<name>/agent.conf
 profile = daily
 ```
 

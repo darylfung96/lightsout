@@ -62,6 +62,14 @@ bin/job run noop                   # run the fixture job
 bin/report --html out/status.html  # static page, no server
 ```
 
+## Product and workspace
+
+This checkout is the product, so the manager, the libraries `lightsout init`
+writes, the `noop` fixture and the test fixtures all live here. The
+maintainer's jobs live in `~/programming/mac-automation`, which is why a clone
+contains no automations. `lightsout init <dir>` writes the same layout into a
+new directory, and `<dir>/jobs/<name>/` is where a job goes.
+
 ## Layout
 
 ```
@@ -69,16 +77,17 @@ docs/         run contract, install, universal mode, agent step, memory pass, de
 src/          the Rust manager: verbs, gates, dashboard, diagnose, workspace, registry
 lib/          the shell job libraries: guards, locks, notify, agent, memory, repairs
 bin/          job and report launchers, plus scaffold
-jobs/<name>/  one directory per automation: job.sh, spec.md, state/, logs/, out/
+jobs/noop/    the fixture job init ships
 spec/         the intent format, plus examples
-triage.conf   the workspace auto-repair policy
-agents.conf   named agent profiles (a job opts in with jobs/<name>/agent.conf)
 tests/        the 261 contract checks, auto-repair, workspace and universal-mode tests
+tests/fixtures/  the video jobs frozen for the suite, plus a notes page and agents.conf
 packaging/    Homebrew formula and macOS signing helper
 install.sh    checksum-verifying release installer
-lightsout.toml  this repository's workspace marker
-notes/        the wiki: index, log, decisions
+lightsout.toml  the marker, so bin/job run noop works in this checkout
 ```
+
+A workspace adds `triage.conf`, `agents.conf` and `notes/`; this checkout keeps
+the fixture only.
 
 ## Name
 

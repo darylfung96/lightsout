@@ -2,9 +2,9 @@
 //!
 //! `status <name>` answers "what is this and what would it do" from the spec
 //! beside the job, not from a prompt or a guess. Two shapes are read because
-//! the repository's own specs use both: a definition list (`deliverable`,
-//! `cadence`, `unit`, `stages`, ...) as in `jobs/everyday-laws/spec.md`, and
-//! prose with a `## What a run does` section as in `jobs/brag-sweep/spec.md`.
+//! jobs in the wild write both: a definition list (`deliverable`, `cadence`,
+//! `unit`, `stages`, ...) as in `spec/examples/video.md`, and prose with a
+//! `## What a run does` section.
 //! A third shape is not an error: it degrades to the title and first
 //! paragraph, because a dashboard must not fail because a spec was written
 //! differently.

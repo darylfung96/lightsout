@@ -28,7 +28,7 @@ trap 'rmdir "$tests_lock" 2>/dev/null || true' EXIT
 LIGHTSOUT_HOME="${TMPDIR:-/tmp}/lightsout-tests-registry.$$"
 rm -rf "$LIGHTSOUT_HOME"
 export LIGHTSOUT_HOME
-trap 'rm -rf "$LIGHTSOUT_HOME"; rmdir "$tests_lock" 2>/dev/null || true' EXIT
+trap 'if [ -d "$REPO/tests/fixtures/jobs/everyday-laws" ]; then rm -rf "$REPO/jobs/everyday-laws"; fi; rm -rf "$LIGHTSOUT_HOME"; rmdir "$tests_lock" 2>/dev/null || true' EXIT
 
 check() { # check <label> <want> <got>
   if [ "$2" = "$3" ]; then printf 'ok   %s\n' "$1"
@@ -712,13 +712,13 @@ check "a passing memory pass completes" 0 "$?"
 # the job records its own receipt under state/ (a shell job has no session)
 reset
 rm -f "$memory_log"
-HOME="$memory_home" U_MEMORY=1 U_MEMORY_FILES="notes/00-index.md" \
+HOME="$memory_home" U_MEMORY=1 U_MEMORY_FILES="tests/fixtures/notes/00-index.md" \
   U_PI_MEMORY="$fake_memory" FAKE_MEMORY_RC=0 FAKE_MEMORY_LOG="$memory_log" \
   bin/job run noop >/dev/null 2>&1
 check "a named note passes save, lint and receipt" 0 "$?"
 check "the pass runs all three store scripts" 3 \
   "$(wc -l < "$memory_log" 2>/dev/null | tr -d ' ')"
-check "save gets the named note" "qmd-mem save notes/00-index.md" \
+check "save gets the named note" "qmd-mem save tests/fixtures/notes/00-index.md" \
   "$(sed -n '1p' "$memory_log" 2>/dev/null)"
 check "lint runs deep" "lint --deep" "$(sed -n '2p' "$memory_log" 2>/dev/null)"
 check "the duplicate scan runs after lint" "scan --from-index" \
@@ -726,10 +726,10 @@ check "the duplicate scan runs after lint" "scan --from-index" \
 
 # the gate names the step that failed: any one of the three stops the pass
 out=$(HOME="$memory_home" U_PI_MEMORY="$fake_memory" FAKE_MEMORY_RC=0 \
-  FAKE_MEMORY_FAIL=save bin/lightsout gate memory --files notes/00-index.md 2>&1); rc=$?
+  FAKE_MEMORY_FAIL=save bin/lightsout gate memory --files tests/fixtures/notes/00-index.md 2>&1); rc=$?
 check "a save failure fails the memory gate" 1 "$rc"
 case "$out" in
-  *"save notes/00-index.md failed"*) echo "ok   the gate names the failed save" ;;
+  *"save tests/fixtures/notes/00-index.md failed"*) echo "ok   the gate names the failed save" ;;
   *) echo "FAIL save failure not named: $out"; fails=$((fails + 1)) ;;
 esac
 
@@ -1022,6 +1022,17 @@ exit 0
 SH
 chmod +x "$video_repo/bin/ffprobe" "$video_repo/bin/ffmpeg"
 
+# The video job ships as a fixture here, not as a workspace job: copy it in for
+# this section so the suite runs the same job.sh a workspace runs, then remove
+# it (the EXIT trap does the same after a failure).
+rm -rf jobs/everyday-laws
+cp -R tests/fixtures/jobs/everyday-laws jobs/everyday-laws
+
+# The suite runs in the product repo, which keeps no wiki, so the memory pass
+# reads the fixture page instead of a workspace note.
+U_MEMORY_FILES="$REPO/tests/fixtures/notes/60-log.md"
+export U_MEMORY_FILES
+
 rm -rf jobs/everyday-laws/state jobs/everyday-laws/out jobs/everyday-laws/logs
 [ -f jobs/everyday-laws/spec.md ] && cmp -s spec/examples/video.md jobs/everyday-laws/spec.md
 check "the video spec is a copy of the example" 0 "$?"
@@ -1137,8 +1148,7 @@ check "the hold spends no attempt" 0 \
 [ -f "$video_repo/calls.log" ]
 check "the hold never starts the driver" 1 "$?"
 
-rm -rf "$video_repo" "$video_agent_log" jobs/everyday-laws/state \
-  jobs/everyday-laws/out jobs/everyday-laws/logs
+rm -rf "$video_repo" "$video_agent_log" jobs/everyday-laws
 reset
 echo
 if [ "$fails" -eq 0 ]; then echo "all checks passed"; else echo "$fails check(s) failed"; exit 1; fi

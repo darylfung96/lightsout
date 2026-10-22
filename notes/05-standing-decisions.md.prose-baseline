@@ -1,8 +1,0 @@
-# accepted legacy flags for prose-lint; one id per line
-e6a65d10802c  # A job's state lives under `jobs/<name>/state/`: a lock, attempts, done markers, one blocke
-50d386d6a7df  # The dashboard rebuilds everything from those files.
-8f045fdb1842  # A database would let the record drift from the artifacts, and the artifacts are what a vie
-b45955e5bf87  # Collapsing the two is how a pipeline retries every ten minutes against a problem only a hu
-200f9e516890  # Every job that writes notes ends with it, and its failure blocks the run.
-eec6f8f58c4d  # Every stage names a gate with numbers.
-1118967e745c  # A job that cannot state its unit cannot know what it already finished.

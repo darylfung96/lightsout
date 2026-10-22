@@ -10,5 +10,6 @@ Release assets are named `lightsout-<target>.tar.gz` with a sibling
 
 Launchd and cron triggers are per machine, so none is packaged:
 `lightsout schedule <job> --at HH:MM` prints one and installs nothing.
-`video-prune` needs `PRUNE_APPLY=1`, which the printer does not set, so its
-plist lives beside its `job.sh` at `jobs/video-prune/launchd.plist`.
+`video-prune` in the maintainer's workspace needs `PRUNE_APPLY=1`, which the
+printer does not set, so that workspace keeps a plist beside the job's
+`job.sh`.

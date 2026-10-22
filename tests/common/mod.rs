@@ -54,7 +54,7 @@ impl Sandbox {
         }
 
         copy_tree(&source.join("lib"), &root.join("lib"));
-        copy_tree(&source.join("notes"), &root.join("notes"));
+        copy_tree(&source.join("tests/fixtures/notes"), &root.join("notes"));
         copy_tree(&source.join("spec"), &root.join("spec"));
         copy_tree(
             &source.join("tests/fake-pi-memory"),
@@ -69,27 +69,22 @@ impl Sandbox {
             &source.join("jobs/noop/job.sh"),
             &root.join("jobs/noop/job.sh"),
         );
-        copy_file(
-            &source.join("jobs/everyday-laws/job.sh"),
-            &root.join("jobs/everyday-laws/job.sh"),
-        );
-        copy_file(
-            &source.join("jobs/everyday-laws/spec.md"),
-            &root.join("jobs/everyday-laws/spec.md"),
-        );
+        // The video jobs live in the maintainer's workspace; the suite uses
+        // frozen copies so a change there cannot rewrite a test's expectation.
         for rel in [
+            "jobs/everyday-laws/job.sh",
+            "jobs/everyday-laws/spec.md",
+            "jobs/everyday-laws/agent.conf",
             "jobs/video-prune/job.sh",
             "jobs/video-prune/prune.py",
             "jobs/video-prune/spec.md",
         ] {
-            copy_file(&source.join(rel), &root.join(rel));
+            copy_file(&source.join("tests/fixtures").join(rel), &root.join(rel));
         }
-        for rel in ["jobs/everyday-laws/agent.conf", "agents.conf"] {
-            let from = source.join(rel);
-            if from.is_file() {
-                copy_file(&from, &root.join(rel));
-            }
-        }
+        copy_file(
+            &source.join("tests/fixtures/agents.conf"),
+            &root.join("agents.conf"),
+        );
         fs::create_dir_all(root.join("jobs/noop")).unwrap();
         fs::create_dir_all(root.join("jobs/everyday-laws")).unwrap();
 
