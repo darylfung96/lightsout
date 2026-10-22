@@ -22,14 +22,22 @@ Verified 2026-10-20: `cargo test` reported 29 tests and 261 ported checks, and
 
 Next, in order:
 
-1. One supervised run: `bin/job run everyday-laws` by hand, comparing the master
-   to the previous night's before trusting it overnight.
-2. Then `lightsout triage everyday-laws` and one `lightsout heal everyday-laws`
-   by hand, so the proposal, the validator and the gate are seen together.
-3. Only then point the launchd plist at `bin/job run everyday-laws
-   --auto-repair` and retire the old launcher.
-4. Decide whether `bin/job check` (the stale alarm) becomes a launchd timer, so
+1. Done 2026-10-22: the first supervised run built and posted № 029. The launchd
+   trigger is `com.darylfung.lightsout.everyday-laws` at 08:30 with
+   `--auto-repair`, and the two old `com.everydaylaws.*` launchers are retired.
+2. Still open: `lightsout triage everyday-laws` and one `lightsout heal` by hand
+   on a real block, so the proposal, the validator and the gate are seen
+   together.
+3. Decide whether `bin/job check` (the stale alarm) becomes a launchd timer, so
    a night with no run announces itself.
+4. Queue discipline: stage 0 refills `pipeline/topic-queue.txt` itself when the
+   next episode has no line — agent, `pipeline/topic_check.py`, three lines —
+   so a dry queue no longer blocks the build; the file stays the place to
+   curate topics by hand.
+
+The memory gate now records a shell job's own receipt at
+`state/memory-pass.json` (save, lint, duplicate scan, page hashes); the
+session-bound `memory-pass-check.py` receipt stays for agent steps.
 
 ## Distribution
 
