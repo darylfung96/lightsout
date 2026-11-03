@@ -245,21 +245,168 @@ pub fn timeout_seconds() -> Result<u64, String> {
     }
 }
 
-pub fn allowed_prefixes(job_dir: &Path) -> Vec<String> {
+/// The `repair.allow` entries, in order; `out/` when the file is absent.
+///
+/// An entry is either a relative prefix inside the job directory (`out/`) or
+/// `<name>=<absolute dir>`, which maps the first path component the agent
+/// writes to a real folder elsewhere. The second form is how a job whose work
+/// lives in another repository gets a bounded write scope without handing the
+/// agent the whole machine, and `repair.allow` is protected, so an agent cannot
+/// widen its own scope.
+pub fn allow_entries(job_dir: &Path) -> Vec<PathBuf> {
     let path = job_dir.join("repair.allow");
-    let mut out = Vec::new();
+    let mut out: Vec<PathBuf> = Vec::new();
     if let Ok(body) = fs::read_to_string(&path) {
         for line in body.lines() {
             let text = line.split('#').next().unwrap_or("").trim();
             if !text.is_empty() {
-                out.push(text.to_string());
+                out.push(PathBuf::from(text));
             }
         }
     }
     if out.is_empty() {
-        out.push("out/".into());
+        out.push(PathBuf::from("out/"));
     }
     out
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Scope {
+    /// A relative prefix under the job directory, e.g. `out`.
+    Job(PathBuf),
+    /// `name=/absolute/dir`: the agent writes `name/...`, it lands in `dir`.
+    External { name: String, root: PathBuf },
+}
+
+/// Turn the entries into scopes, refusing anything that could reach the
+/// workspace's own code. An external root may be anywhere except inside the
+/// workspace or above it, because either would let a repair edit `job.sh`,
+/// another job, or `triage.conf`.
+fn scopes(allow: &[PathBuf], job_dir: &Path) -> Result<Vec<Scope>, String> {
+    let workspace = workspace_root(job_dir);
+    let job_canon = fs::canonicalize(job_dir).unwrap_or_else(|_| job_dir.to_path_buf());
+    let mut out: Vec<Scope> = Vec::new();
+    for entry in allow {
+        let text = entry.to_string_lossy();
+        let text = text.trim().trim_end_matches('/');
+        if text.is_empty() {
+            continue;
+        }
+        let Some((name, root)) = text.split_once('=') else {
+            let rel = normalize_path(text).map_err(|refusal| refusal.to_string())?;
+            out.push(Scope::Job(rel));
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty() || name.contains('/') || name == "." || name == ".." {
+            return Err(format!("scope name '{name}' must be one path component"));
+        }
+        let root = PathBuf::from(root.trim());
+        if !root.is_absolute() {
+            return Err(format!("scope '{name}' needs an absolute directory"));
+        }
+        let canon = fs::canonicalize(&root).map_err(|error| {
+            format!("scope '{name}': cannot resolve {}: {error}", root.display())
+        })?;
+        if !canon.is_dir() {
+            return Err(format!(
+                "scope '{name}': {} is not a directory",
+                canon.display()
+            ));
+        }
+        if canon.starts_with(&job_canon) || job_canon.starts_with(&canon) {
+            return Err(format!(
+                "scope '{name}': {} overlaps the job directory, so it could reach state/ or the job's own files",
+                canon.display()
+            ));
+        }
+        if let Some(workspace) = &workspace {
+            if canon.starts_with(workspace) || workspace.starts_with(&canon) {
+                return Err(format!(
+                    "scope '{name}': {} overlaps the workspace, so it could reach job code or triage.conf",
+                    canon.display()
+                ));
+            }
+        }
+        out.push(Scope::External {
+            name: name.to_string(),
+            root: canon,
+        });
+    }
+    if out.is_empty() {
+        out.push(Scope::Job(PathBuf::from("out")));
+    }
+    let mut names: Vec<String> = Vec::new();
+    for scope in &out {
+        let name = scope_name(scope);
+        if names.contains(&name) {
+            return Err(format!("scope '{name}' is declared twice"));
+        }
+        names.push(name);
+    }
+    Ok(out)
+}
+
+/// Refuse a scope that cannot be resolved before a proposal exists, so a
+/// scheduled repair does not pay for a model call it would only refuse.
+pub fn check_scopes(job_dir: &Path) -> Result<(), String> {
+    scopes(&allow_entries(job_dir), job_dir).map(|_| ())
+}
+
+fn scope_name(scope: &Scope) -> String {
+    match scope {
+        Scope::Job(prefix) => prefix.to_string_lossy().into_owned(),
+        Scope::External { name, .. } => name.clone(),
+    }
+}
+
+/// Resolve one agent path to `(base directory, path below it, inside job dir)`.
+fn resolve_scope<'a>(
+    job_dir: &'a Path,
+    scopes: &'a [Scope],
+    rel: &Path,
+) -> Option<(&'a Path, PathBuf, bool)> {
+    for scope in scopes {
+        match scope {
+            Scope::Job(prefix) => {
+                if rel.starts_with(prefix) {
+                    return Some((job_dir, rel.to_path_buf(), true));
+                }
+            }
+            Scope::External { name, root } => {
+                if rel.starts_with(name) {
+                    let rest = rel.strip_prefix(name).ok()?.to_path_buf();
+                    if rest.as_os_str().is_empty() {
+                        return None;
+                    }
+                    return Some((root.as_path(), rest, false));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn describe_scope(scope: &Scope) -> String {
+    match scope {
+        Scope::Job(prefix) => format!("{}/ (in the job directory)", prefix.display()),
+        Scope::External { name, root } => format!("{name}/ -> {}", root.display()),
+    }
+}
+
+fn describe_scopes(scopes: &[Scope]) -> String {
+    scopes
+        .iter()
+        .map(describe_scope)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn workspace_root(job_dir: &Path) -> Option<PathBuf> {
+    job_dir
+        .ancestors()
+        .find(|dir| dir.join("lightsout.toml").is_file())
+        .and_then(|dir| fs::canonicalize(dir).ok())
 }
 
 /// Render `lib/prompts/repair.md` with the job's state, then redact it.
@@ -282,7 +429,10 @@ pub fn build_prompt(
     };
     let log_tail = log_tail(&paths.log, 80, 32768);
     let attempts = history_tail(paths, 5);
-    let allowed = allowed_prefixes(&paths.dir).join(", ");
+    let allowed = match scopes(&allow_entries(&paths.dir), &paths.dir) {
+        Ok(scopes) => describe_scopes(&scopes),
+        Err(error) => format!("unavailable: {error}"),
+    };
     let proposal_path = attempt.dir.join("proposal.json");
     let blocked_text = if blocked.raw.trim().is_empty() {
         format!(
@@ -700,7 +850,8 @@ pub fn validate(job_dir: &Path, allow: &[PathBuf], proposal: &Value) -> Result<V
         ));
     }
 
-    let prefixes = normalize_allow(allow);
+    let entries: Vec<PathBuf> = allow.to_vec();
+    let scopes = scopes(&entries, job_dir).map_err(|error| refusal("allow", error))?;
     let mut out = Vec::new();
     let mut seen: Vec<PathBuf> = Vec::new();
     let mut total = 0usize;
@@ -735,22 +886,18 @@ pub fn validate(job_dir: &Path, allow: &[PathBuf], proposal: &Value) -> Result<V
                 format!("path '{}' is reserved for the manager", path.display()),
             ));
         }
-        if !prefixes.iter().any(|prefix| path.starts_with(prefix)) {
-            return Err(refusal(
+        let (base, rest, _job_scope) = resolve_scope(job_dir, &scopes, &path).ok_or_else(|| {
+            refusal(
                 "allow",
                 format!(
-                    "path '{}' is outside the allowlist ({})",
+                    "path '{}' is outside the allowed scopes ({})",
                     path.display(),
-                    prefixes
-                        .iter()
-                        .map(|prefix| prefix.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    describe_scopes(&scopes)
                 ),
-            ));
-        }
-        let full = job_dir.join(&path);
-        check_components(job_dir, &path)?;
+            )
+        })?;
+        check_components(base, &rest)?;
+        let full = base.join(&rest);
 
         let has_content = fields.contains_key("content");
         let has_delete = fields.contains_key("delete");
@@ -821,21 +968,6 @@ pub fn validate(job_dir: &Path, allow: &[PathBuf], proposal: &Value) -> Result<V
         });
     }
     Ok(out)
-}
-
-fn normalize_allow(allow: &[PathBuf]) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for prefix in allow {
-        if let Ok(path) = normalize_path(&prefix.to_string_lossy()) {
-            if !path.as_os_str().is_empty() {
-                out.push(path);
-            }
-        }
-    }
-    if out.is_empty() {
-        out.push(PathBuf::from("out"));
-    }
-    out
 }
 
 fn normalize_path(raw: &str) -> Result<PathBuf, Refusal> {
@@ -974,6 +1106,10 @@ pub struct Applied {
 pub fn apply(attempt_dir: &Path, job_dir: &Path, edits: &[Edit]) -> Result<Applied, ApplyError> {
     let mut applied: Vec<(PathBuf, bool)> = Vec::new();
     let mut result: Result<(), ApplyError> = Ok(());
+    let scopes = match scopes(&allow_entries(job_dir), job_dir) {
+        Ok(scopes) => scopes,
+        Err(error) => return Err(apply_error(error)),
+    };
 
     for edit in edits {
         let rel = match normalize_path(&edit.path.to_string_lossy()) {
@@ -983,22 +1119,30 @@ pub fn apply(attempt_dir: &Path, job_dir: &Path, edits: &[Edit]) -> Result<Appli
                 break;
             }
         };
-        let full = job_dir.join(&rel);
-        if !full.starts_with(job_dir) || is_protected(&rel) {
+        let Some((base, rest, job_scope)) = resolve_scope(job_dir, &scopes, &rel) else {
+            result = Err(apply_error(format!(
+                "'{}' is outside the allowed scopes ({})",
+                rel.display(),
+                describe_scopes(&scopes)
+            )));
+            break;
+        };
+        if job_scope && is_protected(&rel) {
             result = Err(apply_error(
                 "edit escapes the job directory or is protected",
             ));
             break;
         }
-        if let Err(refusal) = check_components(job_dir, &rel) {
+        if let Err(refusal) = check_components(base, &rest) {
             result = Err(apply_error(refusal.to_string()));
             break;
         }
+        let full = base.join(&rest);
         match &edit.kind {
             EditKind::Content(content) => {
                 let existed = full.exists();
                 if existed {
-                    if let Err(error) = backup(attempt_dir, job_dir, &rel) {
+                    if let Err(error) = backup(attempt_dir, &full, &rel) {
                         result = Err(error);
                         break;
                     }
@@ -1017,7 +1161,7 @@ pub fn apply(attempt_dir: &Path, job_dir: &Path, edits: &[Edit]) -> Result<Appli
                     )));
                     break;
                 }
-                if let Err(error) = backup(attempt_dir, job_dir, &rel) {
+                if let Err(error) = backup(attempt_dir, &full, &rel) {
                     result = Err(error);
                     break;
                 }
@@ -1053,8 +1197,7 @@ pub fn apply(attempt_dir: &Path, job_dir: &Path, edits: &[Edit]) -> Result<Appli
     Ok(out)
 }
 
-fn backup(attempt_dir: &Path, job_dir: &Path, rel: &Path) -> Result<(), ApplyError> {
-    let source = job_dir.join(rel);
+fn backup(attempt_dir: &Path, source: &Path, rel: &Path) -> Result<(), ApplyError> {
     let target = attempt_dir.join("backup").join(rel);
     if target.is_file() {
         return Ok(());
@@ -1067,14 +1210,14 @@ fn backup(attempt_dir: &Path, job_dir: &Path, rel: &Path) -> Result<(), ApplyErr
             ))
         })?;
     }
-    fs::copy(&source, &target).map_err(|error| {
+    fs::copy(source, &target).map_err(|error| {
         apply_error(format!(
             "cannot back up '{}' to '{}': {error}",
             source.display(),
             target.display()
         ))
     })?;
-    let permissions = fs::metadata(&source)
+    let permissions = fs::metadata(source)
         .map_err(|error| apply_error(format!("cannot read {}: {error}", source.display())))?
         .permissions();
     let _ = fs::set_permissions(&target, permissions);
@@ -1140,8 +1283,14 @@ fn write_applied(attempt_dir: &Path, applied: &[(PathBuf, bool)]) -> Result<(), 
 }
 
 fn rollback(attempt_dir: &Path, job_dir: &Path, applied: &[(PathBuf, bool)]) {
+    let Ok(scopes) = scopes(&allow_entries(job_dir), job_dir) else {
+        return;
+    };
     for (rel, existed) in applied.iter().rev() {
-        let full = job_dir.join(rel);
+        let Some((base, rest, _)) = resolve_scope(job_dir, &scopes, rel) else {
+            continue;
+        };
+        let full = base.join(&rest);
         if *existed {
             let backup = attempt_dir.join("backup").join(rel);
             let _ = fs::copy(&backup, &full);
@@ -1154,11 +1303,7 @@ fn rollback(attempt_dir: &Path, job_dir: &Path, applied: &[(PathBuf, bool)]) {
 pub fn revert(attempt_dir: &Path, job_dir: &Path) -> Result<usize, ApplyError> {
     let body = fs::read_to_string(attempt_dir.join("applied.tsv"))
         .map_err(|error| apply_error(format!("no applied record: {error}")))?;
-    let allowed: Vec<PathBuf> = allowed_prefixes(job_dir)
-        .into_iter()
-        .map(PathBuf::from)
-        .collect();
-    let prefixes = normalize_allow(&allowed);
+    let scopes = scopes(&allow_entries(job_dir), job_dir).map_err(apply_error)?;
     let mut restored = 0usize;
     for line in body.lines() {
         let mut parts = line.split('\t');
@@ -1182,16 +1327,16 @@ pub fn revert(attempt_dir: &Path, job_dir: &Path) -> Result<usize, ApplyError> {
                 rel.display()
             )));
         }
-        if !prefixes.iter().any(|prefix| rel.starts_with(prefix)) {
-            return Err(apply_error(format!(
+        let (base, rest, _) = resolve_scope(job_dir, &scopes, &rel).ok_or_else(|| {
+            apply_error(format!(
                 "'{}' is outside the current repair allowlist",
                 rel.display()
-            )));
-        }
-        if let Err(refusal) = check_components(job_dir, &rel) {
+            ))
+        })?;
+        if let Err(refusal) = check_components(base, &rest) {
             return Err(apply_error(refusal.to_string()));
         }
-        let full = job_dir.join(&rel);
+        let full = base.join(&rest);
         if kind == "created" {
             if full.exists() {
                 fs::remove_file(&full).map_err(|error| {
@@ -1234,6 +1379,13 @@ pub struct Fingerprint {
 /// the manager write the prompt, proposal and log there on purpose; every other
 /// job and code directory is in scope, because an agent that can edit a
 /// neighbouring job's `job.sh` has escaped the job it was asked to repair.
+///
+/// `logs/`, `state/` and `out/` are skipped: a scheduler tick appends to them
+/// while an attempt runs, so a snapshot over them reports a violation for a
+/// write the agent never made. That voided a real repair on 2026-10-24, when
+/// `brag-sweep`'s launchd log grew during the `everyday-laws` attempt. The
+/// files that decide whether a job passed are code, specs and config, and those
+/// stay in scope.
 pub fn fingerprint(paths: &Paths) -> Fingerprint {
     let mut entries = Vec::new();
     let skip = paths.state.join("heal");
@@ -1290,6 +1442,9 @@ fn walk_fingerprint(
             continue;
         };
         if meta.is_dir() {
+            if is_volatile(&path) {
+                continue;
+            }
             walk_fingerprint(repo, &path, skip, out);
         } else {
             out.push((
@@ -1299,6 +1454,14 @@ fn walk_fingerprint(
             ));
         }
     }
+}
+
+/// A directory whose contents a run writes while an attempt is in progress.
+fn is_volatile(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("logs" | "state" | "out")
+    )
 }
 
 fn modified(meta: fs::Metadata) -> u64 {
@@ -1454,6 +1617,123 @@ mod tests {
         assert_eq!(restored, 2);
         assert_eq!(fs::read_to_string(dir.join("out/a.txt")).unwrap(), "before");
         assert!(!dir.join("out/new.txt").exists());
+    }
+
+    #[test]
+    fn external_scope_writes_outside_the_job() {
+        let dir = job_dir("scope-external");
+        let external = temp("scope-external-target");
+        fs::create_dir_all(external.join("030")).unwrap();
+        fs::write(
+            dir.join("repair.allow"),
+            format!("out/\nepisodes={}\n", external.display()),
+        )
+        .unwrap();
+        let allow = allow_entries(&dir);
+        let edits = validate(
+            &dir,
+            &allow,
+            &value(r#"{"fixable":true,"summary":"ok","edits":[{"path":"episodes/030/lesson-raw.md","content":"fixed"}]}"#),
+        )
+        .expect("external edit");
+        let attempt = dir.join("attempt");
+        fs::create_dir_all(&attempt).unwrap();
+        apply(&attempt, &dir, &edits).expect("apply");
+        assert_eq!(
+            fs::read_to_string(external.join("030/lesson-raw.md")).unwrap(),
+            "fixed"
+        );
+        let restored = revert(&attempt, &dir).expect("revert");
+        assert_eq!(restored, 1);
+        assert!(!external.join("030/lesson-raw.md").exists());
+    }
+
+    #[test]
+    fn check_scopes_accepts_a_resolvable_root_and_refuses_a_missing_one() {
+        let dir = job_dir("check-scopes");
+        let external = temp("check-scopes-external");
+        fs::write(
+            dir.join("repair.allow"),
+            format!("out/\nepisodes={}\n", external.display()),
+        )
+        .unwrap();
+        check_scopes(&dir).expect("an existing external root is allowed");
+
+        fs::write(
+            dir.join("repair.allow"),
+            "episodes=/no/such/lightsout/dir\n",
+        )
+        .unwrap();
+        let refused = check_scopes(&dir).expect_err("a missing root cannot be resolved");
+        assert!(refused.contains("cannot resolve"), "{refused}");
+    }
+
+    #[test]
+    fn external_scope_inside_the_job_is_refused() {
+        // A registered job outside a workspace has no lightsout.toml ancestor,
+        // so only this check stops a scope from naming the job's own state/.
+        let dir = job_dir("scope-inside-job");
+        fs::create_dir_all(dir.join("state")).unwrap();
+        fs::write(
+            dir.join("repair.allow"),
+            format!("guard={}\n", dir.join("state").display()),
+        )
+        .unwrap();
+        let allow = allow_entries(&dir);
+        let refused = validate(
+            &dir,
+            &allow,
+            &value(r#"{"fixable":true,"summary":"no","edits":[{"path":"guard/blocked","content":"x"}]}"#),
+        )
+        .expect_err("a scope inside the job could reach state/");
+        assert_eq!(refused.rule, "allow");
+    }
+
+    #[test]
+    fn external_scope_inside_the_workspace_is_refused() {
+        let ws = temp("scope-inside-ws");
+        fs::write(ws.join("lightsout.toml"), "schema = 1\n").unwrap();
+        let dir = ws.join("jobs/foo");
+        fs::create_dir_all(dir.join("out")).unwrap();
+        let other = ws.join("other");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(
+            dir.join("repair.allow"),
+            format!("episodes={}\n", other.display()),
+        )
+        .unwrap();
+        let allow = allow_entries(&dir);
+        let refused = validate(
+            &dir,
+            &allow,
+            &value(
+                r#"{"fixable":true,"summary":"no","edits":[{"path":"episodes/x","content":"x"}]}"#,
+            ),
+        )
+        .expect_err("a scope inside the workspace could reach job code");
+        assert_eq!(refused.rule, "allow");
+    }
+
+    #[test]
+    fn external_scope_above_the_workspace_is_refused() {
+        let ws = temp("scope-above-ws");
+        fs::write(ws.join("lightsout.toml"), "schema = 1\n").unwrap();
+        let dir = ws.join("jobs/foo");
+        fs::create_dir_all(dir.join("out")).unwrap();
+        let above = ws.parent().unwrap().to_path_buf();
+        fs::write(
+            dir.join("repair.allow"),
+            format!("all={}\n", above.display()),
+        )
+        .unwrap();
+        let allow = allow_entries(&dir);
+        let refused = validate(
+            &dir,
+            &allow,
+            &value(r#"{"fixable":true,"summary":"no","edits":[{"path":"all/x","content":"x"}]}"#),
+        )
+        .expect_err("a scope above the workspace contains it");
+        assert_eq!(refused.rule, "allow");
     }
 
     #[test]

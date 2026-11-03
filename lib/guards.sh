@@ -54,6 +54,7 @@ u_block() {
   reason="${reason//$'\t'/ }"; reason="${reason//$'\n'/ }"
   if [ "$DRY" = 1 ]; then u_say "plan: would block [$cls]: $reason"; exit 0; fi
   printf '%s\t%s\t%s\t%s\n' "$(date -Iseconds)" "$cls" "$src" "$reason" > "$STATE/blocked"
+  U_BLOCKED=1
   u_say "BLOCKED [$cls]: $reason"
   u_notify "LightsOut: $JOB blocked" "$reason"
   exit 2
@@ -148,8 +149,29 @@ u_guard_lock() {
   if [ "$DRY" = 1 ]; then u_say "plan: would take the lock"; return 0; fi
   mkdir -p "$STATE/lock"
   printf '%s\n' "$$" > "$STATE/lock/pid"
-  trap 'rm -rf "$STATE/lock"' EXIT
 }
+
+# u_exit — the run's EXIT trap, and the last chance to say why it stopped. It
+# removes the lock, then turns an unguarded exit 1 into a block, because a job
+# that cannot finish must exit 2 with a reason (docs/run-contract.md) and an
+# uncaught failure is exactly the case that used to leave no block for the
+# manager to route. It covers the whole run, not just the part after the lock,
+# because a job can die while reading its own config. A job that blocked itself
+# exited 2 with U_BLOCKED set, so a real block is never overwritten; plan
+# touches nothing; and a script that sourced this file without a state
+# directory is left alone rather than writing a block at the filesystem root.
+u_exit() {
+  local rc="${U_EXIT_RC:-$?}"
+  [ -n "${STATE:-}" ] && rm -rf "$STATE/lock"
+  if [ "$rc" -eq 1 ] && [ "${U_BLOCKED:-0}" != 1 ] && [ "${DRY:-0}" != 1 ] \
+     && [ -n "${STATE:-}" ] && [ -n "${LOG:-}" ]; then
+    U_BLOCKED=1
+    u_block --class human --source crash "uncaught failure (exit 1); see $LOG"
+  fi
+  return "$rc"
+}
+
+trap 'u_exit' EXIT
 
 u_guard_disk() {
   local need="${1:-2000}" free

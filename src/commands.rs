@@ -412,7 +412,16 @@ fn check_job(paths: &Paths, check_log: &Path) -> Check {
         return Check::Quiet;
     }
     let today = clock::today();
-    if state_dir.join("done").join(&today).exists() {
+    // A job that names its deliverable is late when the deliverable is missing,
+    // whatever today's runs reported: a hold (rc 0, nothing produced) is the
+    // case that silenced the alarm on 2026-10-24, when the daily build held for
+    // the wrong reason and the day's episode never existed.
+    let artifact = state::expect_artifact(state_dir);
+    if let Some(pattern) = &artifact {
+        if artifact_today(pattern, &paths.dir, &today) {
+            return Check::Quiet;
+        }
+    } else if state_dir.join("done").join(&today).exists() {
         return Check::Quiet;
     }
     if state::lock_live(state_dir) {
@@ -422,7 +431,7 @@ fn check_job(paths: &Paths, check_log: &Path) -> Check {
         println!("blocked: {name} missed its {expect} run");
         return Check::Blocked;
     }
-    if state::held_today(state_dir, &today) {
+    if artifact.is_none() && state::held_today(state_dir, &today) {
         return Check::Quiet;
     }
 
@@ -430,12 +439,16 @@ fn check_job(paths: &Paths, check_log: &Path) -> Check {
     if !marker.exists() {
         let _ = fs::create_dir_all(state_dir.join("alerts"));
         let _ = fs::write(&marker, format!("{}\t{}\n", clock::iso_now(), expect));
+        let body = match &artifact {
+            Some(pattern) => format!("no file matching {} from today", pattern.display()),
+            None => format!("no run by {expect} today"),
+        };
         notify(
             &paths.repo,
             &paths.alerts(),
             check_log,
             &format!("LightsOut: {name} stale"),
-            &format!("no run by {expect} today"),
+            &body,
         );
     }
     println!("stale: {name} (expected {expect})");
@@ -1052,6 +1065,7 @@ fn agent_attempt(
         eprintln!("heal: {error}");
         return 2;
     }
+    let before = triage::failure_key(blocked);
     let mut attempt = match heal::begin_attempt(paths) {
         Ok(attempt) => attempt,
         Err(error) => {
@@ -1059,10 +1073,24 @@ fn agent_attempt(
             return 2;
         }
     };
+    // A scope that cannot be resolved refuses every proposal, so say so before
+    // the runner is named or paid for one. The check reads repair.allow only.
+    if let Err(error) = heal::check_scopes(&paths.dir) {
+        record_heal(
+            paths,
+            &attempt,
+            action,
+            &before,
+            &before,
+            "invalid:scope",
+            2,
+        );
+        eprintln!("heal: {error}");
+        return 2;
+    }
     attempt.agent = Some(agent_label.clone());
     lock.refresh();
     println!("heal: agent {agent_label}");
-    let before = triage::failure_key(blocked);
     let timeout = match heal::timeout_seconds() {
         Ok(value) => value,
         Err(error) => {
@@ -1113,10 +1141,7 @@ fn agent_attempt(
     }
     match outcome {
         heal::AgentOutcome::Proposal(value) => {
-            let allow: Vec<std::path::PathBuf> = heal::allowed_prefixes(&paths.dir)
-                .into_iter()
-                .map(std::path::PathBuf::from)
-                .collect();
+            let allow = heal::allow_entries(&paths.dir);
             let edits = match heal::validate(&paths.dir, &allow, &value) {
                 Ok(edits) => edits,
                 Err(refusal) => {
@@ -1314,10 +1339,7 @@ fn heal_apply(repo: &Path, name: &str) -> i32 {
             return 2;
         }
     };
-    let allow: Vec<std::path::PathBuf> = heal::allowed_prefixes(&paths.dir)
-        .into_iter()
-        .map(std::path::PathBuf::from)
-        .collect();
+    let allow = heal::allow_entries(&paths.dir);
     let edits = match heal::validate(&paths.dir, &allow, &proposal) {
         Ok(edits) => edits,
         Err(refusal) => {

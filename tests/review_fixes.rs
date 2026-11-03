@@ -129,6 +129,63 @@ fn the_tripwire_sees_another_jobs_code() {
 }
 
 #[test]
+fn a_concurrent_log_append_does_not_void_a_heal() {
+    let s = Sandbox::new("rf-tripwire-log");
+    // A job that passes once its marker exists, so an applied repair is visible.
+    write_job(
+        &s,
+        "ready",
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+. "$REPO/lib/guards.sh"
+if [ ! -f "$OUT/ready" ]; then
+  u_block --class retryable --source gate:ready "ready marker missing"
+fi
+u_done
+"#,
+    );
+    let blocked = s.run(&["run", "ready"]);
+    assert_eq!(
+        code(&blocked),
+        2,
+        "the job blocks first: {}",
+        combined(&blocked)
+    );
+    write_job(&s, "other", "#!/usr/bin/env bash\nexit 0\n");
+    s.write("jobs/other/logs/launchd.log", "tick\n");
+    s.write("triage.conf", "ready * agent:apply\n");
+    let proposal = fake_proposal(
+        &s,
+        r#"{"fixable":true,"summary":"fix","edits":[{"path":"out/ready","content":"ok"}]}"#,
+    );
+    let log = s
+        .path("jobs/other/logs/launchd.log")
+        .to_string_lossy()
+        .into_owned();
+
+    let out = s.run_env(
+        &["heal", "ready"],
+        &[
+            ("U_RUNNER", "fake"),
+            ("FAKE_AGENT_PROPOSAL", &proposal),
+            ("FAKE_AGENT_TOUCH", &log),
+        ],
+    );
+
+    assert_eq!(
+        code(&out),
+        0,
+        "a scheduler log growing is not tamper: {}",
+        combined(&out)
+    );
+    assert!(s.is_file("jobs/ready/out/ready"), "the repair is applied");
+    assert!(
+        s.read("jobs/other/logs/launchd.log").contains("tampered"),
+        "the concurrent write really happened"
+    );
+}
+
+#[test]
 fn an_inherited_retrying_variable_does_not_bypass_a_block() {
     let s = Sandbox::new("rf-retrying");
     write_job(
@@ -227,13 +284,18 @@ fn an_invalid_attempt_cap_fails_closed() {
     let out = s.run_env(&["run", "noop"], &[("MAX_ATTEMPTS", "two")]);
     assert_eq!(
         code(&out),
-        1,
-        "invalid cap is a failure: {}",
+        2,
+        "invalid cap blocks instead of running: {}",
         combined(&out)
     );
     assert!(
         combined(&out).contains("MAX_ATTEMPTS"),
         "the bad setting is named"
+    );
+    let blocked = s.read("jobs/noop/state/blocked");
+    assert!(
+        blocked.contains("\tcrash\t"),
+        "the config failure is recorded as a crash: {blocked}"
     );
     assert_eq!(
         s.count_prefix(
@@ -637,8 +699,11 @@ printf "bounded=%s marker=%s\n" "$?" "$([ -e "$1/bounded.marker" ] && echo prese
         !dir.join("slow.done").is_file(),
         "a timed-out agent writes no marker"
     );
+    // A generous wall-clock bound: the point is that the deadline ends the call
+    // rather than the harness hanging, and a loaded machine can stretch a
+    // two-second wait well past twenty (2026-10-24, Docker pinning the cores).
     assert!(
-        elapsed < std::time::Duration::from_secs(20),
+        elapsed < std::time::Duration::from_secs(90),
         "the deadline ends the call, not the test: {elapsed:?}"
     );
 }
@@ -710,5 +775,161 @@ fn a_failed_init_removes_the_files_it_created() {
         s.read("broken/jobs"),
         "not a directory\n",
         "a file that predated init is left untouched"
+    );
+}
+
+#[test]
+fn an_unusable_scope_is_refused_before_the_runner_is_called() {
+    let s = Sandbox::new("rf-bad-scope");
+    block_ready(&s);
+    s.write("triage.conf", "ready * agent:apply\n");
+    s.write(
+        "jobs/ready/repair.allow",
+        "episodes=/no/such/lightsout/directory\n",
+    );
+    let proposal = fake_proposal(
+        &s,
+        r#"{"fixable":true,"summary":"no","edits":[{"path":"out/ready","content":"ok"}]}"#,
+    );
+    let calls = s.path("agent-calls.log").to_string_lossy().into_owned();
+    let out = s.run_env(
+        &["heal", "ready"],
+        &[
+            ("U_RUNNER", "fake"),
+            ("FAKE_AGENT_PROPOSAL", &proposal),
+            ("FAKE_AGENT_LOG", &calls),
+        ],
+    );
+
+    assert_eq!(code(&out), 2, "a bad scope refuses: {}", combined(&out));
+    assert!(
+        combined(&out).contains("cannot resolve"),
+        "the root is named: {}",
+        combined(&out)
+    );
+    assert!(
+        !std::path::Path::new(&calls).exists(),
+        "the runner must not be called for a scope that cannot work"
+    );
+    let history = s.read("jobs/ready/state/heal/history.tsv");
+    assert!(
+        history.contains("invalid:scope"),
+        "the verdict is recorded: {history}"
+    );
+}
+
+#[test]
+fn an_unguarded_exit_one_writes_a_crash_block() {
+    let s = Sandbox::new("rf-crash-block");
+    s.mkdir("jobs/ready/state");
+    s.mkdir("jobs/ready/out");
+    let repo = s.root.to_string_lossy().into_owned();
+    let state = s.path("jobs/ready/state").to_string_lossy().into_owned();
+    let out_dir = s.path("jobs/ready/out").to_string_lossy().into_owned();
+    let log = s.path("jobs/ready/run.log").to_string_lossy().into_owned();
+    let script = r#". "$REPO/lib/guards.sh"
+u_guard_lock
+exit 1"#;
+    let out = s.bash(
+        script,
+        &[
+            ("REPO", &repo),
+            ("JOB", "ready"),
+            ("JOB_DIR", &state),
+            ("STATE", &state),
+            ("OUT", &out_dir),
+            ("LOG", &log),
+            ("UNIT", "2026-10-23"),
+            ("DRY", "0"),
+            ("U_NOTIFY", "0"),
+        ],
+        &[],
+    );
+
+    assert_eq!(
+        code(&out),
+        2,
+        "the trap turns exit 1 into a block: {}",
+        combined(&out)
+    );
+    let blocked = s.read("jobs/ready/state/blocked");
+    let fields: Vec<&str> = blocked.trim_end().split('\t').collect();
+    assert_eq!(fields.get(1), Some(&"human"), "block class: {blocked}");
+    assert_eq!(fields.get(2), Some(&"crash"), "block source: {blocked}");
+    assert!(
+        !s.exists("jobs/ready/state/lock"),
+        "the run lock is released"
+    );
+
+    let clean = r#". "$REPO/lib/guards.sh"
+u_guard_lock
+exit 0"#;
+    let quiet = s.bash(
+        clean,
+        &[
+            ("REPO", &repo),
+            ("JOB", "ready"),
+            ("JOB_DIR", &state),
+            ("STATE", &state),
+            ("OUT", &out_dir),
+            ("LOG", &log),
+            ("UNIT", "2026-10-23"),
+            ("DRY", "0"),
+            ("U_NOTIFY", "0"),
+        ],
+        &[],
+    );
+    assert_eq!(code(&quiet), 0, "a clean exit stays clean");
+}
+
+#[test]
+fn check_alarms_when_todays_deliverable_is_missing() {
+    let s = Sandbox::new("rf-check-artifact");
+    // A job that runs, exits 0 and produces nothing — the 2026-10-24 morning hold.
+    write_job(
+        &s,
+        "holds",
+        "#!/usr/bin/env bash\nset -euo pipefail\n. \"$REPO/lib/guards.sh\"\nu_held \"nothing to do\"\n",
+    );
+    let pattern = s.path("outbox/*-master.mp4");
+    s.write(
+        "jobs/holds/state/expect",
+        &format!("00:00\n{}\n", pattern.display()),
+    );
+    let run = s.run(&["run", "holds"]);
+    assert_eq!(code(&run), 0, "the tick holds: {}", combined(&run));
+
+    let out = s.run_env(&["check", "holds"], &[("U_NOTIFY", "0")]);
+    assert!(
+        stdout(&out).contains("stale: holds"),
+        "a hold without the deliverable is late: {}{}",
+        stdout(&out),
+        stderr(&out)
+    );
+}
+
+#[test]
+fn check_is_quiet_when_todays_deliverable_exists() {
+    let s = Sandbox::new("rf-check-artifact-ok");
+    write_job(
+        &s,
+        "holds",
+        "#!/usr/bin/env bash\nset -euo pipefail\n. \"$REPO/lib/guards.sh\"\nu_held \"nothing to do\"\n",
+    );
+    let pattern = s.path("outbox/*-master.mp4");
+    s.write(
+        "jobs/holds/state/expect",
+        &format!("00:00\n{}\n", pattern.display()),
+    );
+    s.write("outbox/031-master.mp4", "master\n");
+    let run = s.run(&["run", "holds"]);
+    assert_eq!(code(&run), 0, "the tick holds: {}", combined(&run));
+
+    let out = s.run_env(&["check", "holds"], &[("U_NOTIFY", "0")]);
+    assert!(
+        !stdout(&out).contains("stale: holds"),
+        "the deliverable silences the alarm: {}{}",
+        stdout(&out),
+        stderr(&out)
     );
 }

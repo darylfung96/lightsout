@@ -88,6 +88,19 @@ The distinction is the whole point. A blocked job notifies once and then stays
 quiet while still exiting `2`, so a scheduler sees a persistent non-zero state
 without a notification every ten minutes.
 
+`1` is a verdict, not an excuse to leave no record. `lib/guards.sh` installs an
+`EXIT` trap as soon as a job sources it, and that trap turns an unguarded exit
+`1` into a block with `--source crash` (class `human`), so a job that dies while
+reading its own config still leaves the manager something to route instead of a
+bare failure a scheduler can only report. A job that already blocked exits `2`
+and is left alone, and `plan` writes nothing.
+
+The consequence is deliberate: a job that sources `guards.sh` cannot report a
+bare failure, because the trap would block it. `1` therefore belongs to a
+command job, which is a job with no `job.sh` and no guards, and to the manager's
+own errors. A guarded job that means "failed" must block instead, and the class
+is what says whether a retry could help.
+
 ## Workspace
 
 A workspace is a directory with a `lightsout.toml` marker recording `schema`
@@ -194,11 +207,19 @@ every stage that costs money must consult it.
 
 ## A run that never happened
 
-`state/expect` is one line, `HH:MM` local: the time a run is due. Whoever
+The time a run is due lives in `state/expect` as `HH:MM` local, and whoever
 schedules the run writes it before the run, because a run cannot report that it
 failed to start. A job whose time has been reached with no `done/<today>`, no
 `lock`, no `blocked` marker and no run today that ended held has missed a run,
 and `status --json` reports `stale: true` for it.
+
+An optional second line names the day's deliverable, as a file pattern whose
+`*` and `?` match a file name; a relative path is resolved against the job
+directory. When it is declared, the deliverable decides, and a hold cannot
+suppress the alarm: a run that exits `0` while the day's episode is missing is
+exactly the silence this file exists to break (2026-10-24, when a build held for
+the wrong reason and the alarm reported nothing because the run itself
+succeeded).
 
 A hold is not a miss. Another run holding the `lock` is doing the work only when
 the pid in `state/lock/pid` is still running; a lock directory left by SIGKILL
@@ -251,12 +272,9 @@ the stop, and keeps the table below. The table shows the last ten runs as
 squares, the stage as `2/4`, the due time with `met`, `held`, `paused` or
 `late 1h 20m`, attempts as today / all time, and today's spend. A row opens for
 the spec summary, cadence, unit, agent profile, memory receipt, deliverable and
-last ten runs. The `duration` cell names the work time in parentheses when the
+last five runs. The `duration` cell names the work time in parentheses when the
 newest tick was a hold. `--open` passes the written file to `open` (or
 `xdg-open`). The page is one file: no server, no network asset, no refresh.
-
-An optional second line of `state/expect` names the day's deliverable as a file
-pattern; the page marks it met or missing.
 
 Give `lightsout status` a job name and it prints that job's block in place of
 its table row, because one row cannot carry a spec and five runs; `--detail`

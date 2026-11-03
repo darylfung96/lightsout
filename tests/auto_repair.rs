@@ -393,15 +393,17 @@ fn retry_action_stops_when_the_same_failure_returns() {
 #[test]
 fn retry_records_a_failed_rerun_as_failed() {
     let s = Sandbox::new("ar-retry-failed");
+    // No guards.sh here on purpose: a guarded job turns exit 1 into a crash
+    // block, and this test is about the manager's `failed` verdict for a rerun.
     s.write(
         "jobs/ready/job.sh",
         r#"#!/usr/bin/env bash
 set -euo pipefail
-. "$REPO/lib/guards.sh"
-u_guard_attempts
 if [ ! -f "$STATE/tried" ]; then
   : > "$STATE/tried"
-  u_block --class retryable --source sweep "transient failure"
+  printf '%s\t%s\t%s\t%s\n' "$(date -Iseconds)" retryable sweep "transient failure" \
+    > "$STATE/blocked"
+  exit 2
 fi
 exit 1
 "#,

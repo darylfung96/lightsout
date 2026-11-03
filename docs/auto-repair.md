@@ -137,12 +137,45 @@ a warning in `doctor` and a refusal at run time, so the manager never silently
 falls back to a different model.
 
 The validator is the boundary in both modes, because the prompt can be argued
-with and a path check cannot. It accepts only relative paths under an allowlist,
-refuses `job.sh` , `spec.md` , `repairs.sh` , `state/` , `logs/` , `lib/` ,
-and `spec/` , refuses symlinked path components, limits a proposal to 20 edits
-and 2 MiB of
-text, and rejects unknown fields. An agent cannot smuggle in a shell command,
-because the proposal format has no field for one.
+with and a path check cannot. It accepts only relative paths, refuses `job.sh` ,
+`spec.md` , `repairs.sh` , `state/` , `logs/` , `lib/` , and `spec/` , refuses
+symlinked path components, limits a proposal to 20 edits and 2 MiB of text, and
+rejects unknown fields. An agent cannot smuggle in a shell command, because the
+proposal format has no field for one.
+
+### Where a proposal may write
+
+Each line of `repair.allow` adds one scope, and the agent writes a relative
+path, so the manager can resolve its first component against a scope and never
+needs an absolute path in a proposal. A line with no `=` resolves under the job
+directory, because that is the tree the job owns; `out/` is the scope an absent
+file implies. An entry of the form `name=/absolute/dir` maps the name the agent
+writes to a folder elsewhere, which is how a job whose artifacts live in another
+repository gets a bounded write scope:
+
+```
+out/
+episodes=/Users/me/programming/video-automation/episodes
+```
+
+The agent still writes `episodes/030/lesson-raw.md`; the manager maps the first
+component to the root it was given. The mapping is the only place an absolute
+path appears, and `repair.allow` is itself protected, so an agent cannot widen
+its own scope. An external root may not sit inside the job directory, inside
+the workspace, or above the workspace, because each of those would let a
+proposal reach the job's own `state/`, another job, `job.sh` or `triage.conf`;
+the manager canonicalizes the root and refuses the overlap.
+
+An external root may name an artifact folder such as `episodes/`, because that
+is where the lesson lives. It should not name `pipeline/` or `lib/`, because
+those files decide whether the job passed, and a repair that can widen the gate
+turns a real failure into an invisible one, so the allowlist stops at artifacts.
+
+The scope is checked before the runner is called: a root that cannot be
+resolved, sits in the wrong place or repeats a name is refused with
+`invalid:scope` and no proposal is requested, because a repair that would be
+refused anyway is not worth a model call.
+
 
 After the attempt the manager compares the new block's failure key with the old
 one, because that comparison is the only evidence of progress. A different key
@@ -287,8 +320,11 @@ artifact back.
 - The agent is not sandboxed by the manager. v1 takes a metadata fingerprint of
   the job and code directories before the runner and refuses the proposal when
   anything changed; that is a tripwire for accidental writes, not a security
-  boundary against a determined process. Adapter-level read-only modes are the
-  follow-up.
+  boundary against a determined process. It covers code, specs and config, and
+  skips `logs/`, `state/` and `out/`, because a scheduler tick appends to those
+  while an attempt runs and a real repair was voided that way on 2026-10-24. A
+  proposal's paths are still checked against `repair.allow`, which is the
+  boundary; adapter-level read-only modes are the follow-up.
 - Redaction is best-effort. The prompt scrubs common token shapes and secret
   values, but logs can contain data no scanner recognises; run the runner
   locally and keep secrets out of job logs.

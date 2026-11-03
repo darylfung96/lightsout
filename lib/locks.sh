@@ -82,6 +82,9 @@ u_resource_cleanup() {
   local rc=$?
   u_resource_release_all
   if [ -n "${U_RESOURCE_PREV_TRAP:-}" ]; then
+    # The captured trap cannot see the shell's status any more, because this
+    # function has run commands since; hand it the number it needs.
+    U_EXIT_RC=$rc
     eval "$U_RESOURCE_PREV_TRAP" || true
   fi
   return "$rc"

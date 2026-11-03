@@ -793,7 +793,7 @@ reset
 rm -f "$agent_calls"
 NOOP_AGENT=1 U_RUNNER=fake FAKE_AGENT_LOG="$agent_calls" FAKE_AGENT_RC=1 \
   bin/job run noop >/dev/null 2>&1
-check "a failing runner fails the job" 1 "$?"
+check "a failing runner blocks the job" 2 "$?"
 check "a failing runner was tried once" 1 "$(agent_invocations)"
 [ -f "$agent_marker" ]; check "a failing runner writes no marker" 1 "$?"
 [ -f "jobs/noop/state/done/$(date +%F)" ]
@@ -844,7 +844,7 @@ check "the repository's stub is the one that ran" 1 \
 # an unknown runner is a code error: it fails before anything is frozen
 reset
 NOOP_AGENT=1 U_RUNNER=not-a-runner bin/job run noop >/dev/null 2>&1
-check "an unknown runner fails closed" 1 "$?"
+check "an unknown runner fails closed" 2 "$?"
 [ -f "$agent_marker" ]; check "an unknown runner writes no marker" 1 "$?"
 
 # plan runs no agent and renders no prompt

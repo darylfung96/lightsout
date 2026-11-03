@@ -538,7 +538,7 @@ fn t17_run_history() {
         body.contains(">duration</th>"),
     );
     c.is_true(
-        "the page names the last 5 runs",
+        "the page names the last 10 runs",
         body.contains(">last 10</th>"),
     );
     c.check(
@@ -1025,7 +1025,9 @@ fn t21_agent_adapter() {
     s.reset_noop();
     let _ = fs::remove_file(&calls);
     let failed = run_agent(&s, &[("FAKE_AGENT_RC", "1")]);
-    c.check("a failing runner fails the job", 1, code(&failed));
+    // A guarded job turns exit 1 into a crash block, so the run is blocked
+    // rather than failed; the block itself is covered in review_fixes.rs.
+    c.check("a failing runner blocks the job", 2, code(&failed));
     c.check(
         "a failing runner was tried once",
         1,
@@ -1171,7 +1173,7 @@ printf "rc=%s\n" "$?""#;
         &["run", "noop"],
         &[("NOOP_AGENT", "1"), ("U_RUNNER", "not-a-runner")],
     );
-    c.check("an unknown runner fails closed", 1, code(&unknown));
+    c.check("an unknown runner fails closed", 2, code(&unknown));
     c.check(
         "an unknown runner writes no marker",
         1,
