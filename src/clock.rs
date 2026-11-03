@@ -56,6 +56,19 @@ pub fn now_hm() -> String {
     format_epoch(now_epoch(), "%H:%M")
 }
 
+/// Minutes since local midnight, for due-time comparisons.
+pub fn now_minutes() -> i64 {
+    now_hm()
+        .split_once(':')
+        .and_then(|(h, m)| Some(h.parse::<i64>().ok()? * 60 + m.parse::<i64>().ok()?))
+        .unwrap_or(0)
+}
+
+/// Epoch seconds for a timestamp that carries an offset.
+pub fn epoch_of(iso: &str) -> Option<i64> {
+    parse_civil(iso).and_then(|civil| civil.epoch())
+}
+
 pub fn iso(epoch: i64) -> String {
     format_epoch(epoch, ISO)
 }

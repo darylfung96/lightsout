@@ -513,7 +513,7 @@ check "a blocked run keeps its exit in the history" 2 \
 check "a retry is recorded as its own verb" retry \
   "$(awk -F'\t' 'END{print $4}' jobs/noop/state/runs.tsv 2>/dev/null)"
 
-# the JSON window is the last ten; the page keeps the duration and the last five
+# the JSON window is the last ten; the page keeps the duration and the last ten runs
 reset
 for i in 1 2 3 4 5 6 7 8 9 10 11 12; do bin/job run noop >/dev/null 2>&1; done
 check "runs.tsv keeps every completed run" 12 \
@@ -530,20 +530,20 @@ assert r["last_duration"] == int(rows[-1][5]), (r["last_duration"], rows[-1])
 ' && echo "ok   the last ten runs are parsed oldest first" \
   || { echo "FAIL run history window"; fails=$((fails + 1)); }
 bin/report --html /tmp/lightsout-history.html >/dev/null
-grep -q '<th>duration</th>' /tmp/lightsout-history.html
+grep -q ">duration</th>" /tmp/lightsout-history.html
 check "the page names the duration" 0 "$?"
-grep -q '<th>last 5 runs</th>' /tmp/lightsout-history.html
-check "the page names the last 5 runs" 0 "$?"
+grep -q ">last 10</th>" /tmp/lightsout-history.html
+check "the page names the last 10 runs" 0 "$?"
 # The page has one row per job, so count the fixture's row rather than every
 # row in the workspace: another job with history must not change this check.
 page_runs=$(python3 - <<'PY'
 import re
 html = open('/tmp/lightsout-history.html').read()
-row = re.search(r"<tr class='[^']*'><td><b>noop</b>.*?</tr>", html, re.S).group(0)
-print(row.count("class='run'"))
+row = re.search(r"<tr class='[^']*'>.*?<span class=\"name\">noop</span>.*?</tr>", html, re.S).group(0)
+print(row.count('class="rd '))
 PY
 )
-check "the page renders five recent runs" 5 "$page_runs"
+check "the page renders ten recent runs" 10 "$page_runs"
 
 # 18 — resource locks: a named resource lets one run through at a time; a busy
 # resource is a hold (exit 0, no work), and a lock left by a dead or expired

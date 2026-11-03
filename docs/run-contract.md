@@ -244,11 +244,19 @@ writing `done/<unit>`: a `last_duration` of 0 beside a real history is a held
 tick, not a job that did nothing for no time. Attempts are reported both ways,
 because the cap is a day: `attempts_today` counts this day's `<date>.attempt-N`
 files and `attempts_total` counts every one on disk, so the page cannot read
-"0 attempts" for a job that has two. The HTML table from
-`lightsout report --html` adds `duration`, `last 5 runs` and an
-`attempts today / total` cell, because the page is read by a person scanning for
-a run that got slower and the file keeps the full history; the `duration` cell
-names the work time in parentheses when the newest tick was a hold.
+"0 attempts" for a job that has two. `lightsout report --html` turns the same
+data into a dashboard for a person. It counts what needs a person, lists every
+blocked, failed or overdue job with its triage class and the command that reads
+the stop, and keeps the table below. The table shows the last ten runs as
+squares, the stage as `2/4`, the due time with `met`, `held`, `paused` or
+`late 1h 20m`, attempts as today / all time, and today's spend. A row opens for
+the spec summary, cadence, unit, agent profile, memory receipt, deliverable and
+last ten runs. The `duration` cell names the work time in parentheses when the
+newest tick was a hold. `--open` passes the written file to `open` (or
+`xdg-open`). The page is one file: no server, no network asset, no refresh.
+
+An optional second line of `state/expect` names the day's deliverable as a file
+pattern; the page marks it met or missing.
 
 Give `lightsout status` a job name and it prints that job's block in place of
 its table row, because one row cannot carry a spec and five runs; `--detail`

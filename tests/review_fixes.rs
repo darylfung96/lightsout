@@ -331,7 +331,7 @@ fn a_run_from_an_earlier_unit_is_not_never_run() {
     assert_eq!(code(&page), 0, "report: {}", combined(&page));
     let body = s.read("out/state.html");
     assert!(
-        body.contains(&format!("<td>{want}</td>")),
+        body.contains(&format!(">{want}</span>")),
         "the page says the same thing: {body}"
     );
     assert!(

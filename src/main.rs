@@ -9,6 +9,7 @@ mod gates;
 mod heal;
 mod registry;
 mod repo;
+mod report;
 mod schedule;
 mod spec;
 mod state;

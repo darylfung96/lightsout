@@ -7,7 +7,7 @@
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::clock;
 
@@ -259,6 +259,21 @@ pub fn spend_today(state: &Path, today: &str) -> i64 {
     total
 }
 
+/// Every cent booked in `state/ledger.tsv`, for the page's running total.
+pub fn spend_total(state: &Path) -> i64 {
+    let mut total = 0i64;
+    for line in lines(&state.join("ledger.tsv")) {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        if let Ok(cents) = parts[1].parse::<i64>() {
+            total += cents;
+        }
+    }
+    total
+}
+
 /// `state/expect` is one line, `HH:MM` local. Returns
 /// `(minutes since midnight, "HH:MM")`.
 pub fn expect_time(state: &Path) -> Option<(i64, String)> {
@@ -281,6 +296,20 @@ pub fn expect_time(state: &Path) -> Option<(i64, String)> {
         return None;
     }
     Some((hour * 60 + minute, line.to_string()))
+}
+
+/// The optional second line of `state/expect`: a file pattern that has to exist
+/// with today's date. It is how a job says what "done today" means, because a
+/// run that exits 0 without producing anything is a hold, and a hold cannot be
+/// told from a quiet success without knowing the deliverable.
+pub fn expect_artifact(state: &Path) -> Option<PathBuf> {
+    let raw = fs::read(state.join("expect")).ok()?;
+    let body = String::from_utf8_lossy(&raw);
+    let line = body.lines().nth(1)?.trim();
+    if line.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(line))
 }
 
 /// `%Y-%m-%dT%H:%M:%S%z` for a file's mtime, or None when it is gone.

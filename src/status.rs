@@ -16,6 +16,19 @@ use crate::spec;
 use crate::state;
 
 #[derive(Clone, Debug)]
+pub struct MemoryPass {
+    pub age: i64,
+    pub files: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct HealLast {
+    pub action: String,
+    pub verdict: String,
+    pub age: Option<i64>,
+}
+
+#[derive(Clone, Debug)]
 pub struct JobState {
     pub name: String,
     pub has_job: bool,
@@ -31,14 +44,32 @@ pub struct JobState {
     pub heal_attempts_today: usize,
     pub last_heal: Option<String>,
     pub spend_today: i64,
+    pub spend_total: i64,
     pub last_exit: Option<i64>,
     pub last_run: Option<String>,
+    pub last_run_epoch: Option<i64>,
+    pub last_work_epoch: Option<i64>,
     pub last_duration: Option<i64>,
     pub last_work_duration: Option<i64>,
     pub runs: Vec<state::Run>,
     pub out_files: i64,
     pub expect: Option<String>,
+    pub expect_minutes: Option<i64>,
+    pub overdue_minutes: Option<i64>,
     pub stale: bool,
+    pub held: bool,
+    pub summary: String,
+    pub cadence: Option<String>,
+    pub stages_total: usize,
+    pub agent: Option<String>,
+    pub agent_configured: bool,
+    pub agent_error: Option<String>,
+    pub deliverable: Option<String>,
+    pub deliverable_ok: Option<bool>,
+    pub memory: Option<MemoryPass>,
+    pub heal_last: Option<HealLast>,
+    pub registered: bool,
+    pub job_dir: String,
 }
 
 fn job_state(repo: &Path, name: &str) -> JobState {
@@ -48,6 +79,14 @@ fn job_state(repo: &Path, name: &str) -> JobState {
     let out = paths.out.clone();
     let today = clock::today();
     let log = paths.log.clone();
+
+    let spec = spec::read(&dir.join("spec.md"));
+    let artifact = state::expect_artifact(&st);
+    let held = state::held_today(&st, &today);
+    let last_heal_line = state::lines(&st.join("heal").join("history.tsv"))
+        .into_iter()
+        .rfind(|line| !line.trim().is_empty());
+    let heal_last = last_heal_line.as_deref().map(parse_heal_line);
 
     let mut rec = JobState {
         name: name.to_string(),
@@ -62,24 +101,60 @@ fn job_state(repo: &Path, name: &str) -> JobState {
         attempts_today: state::attempts_today(&st, &today),
         attempts_total: state::attempts_total(&st),
         heal_attempts_today: crate::triage::heal_count(&st),
-        last_heal: state::lines(&st.join("heal").join("history.tsv"))
-            .last()
-            .cloned(),
+        last_heal: last_heal_line,
         spend_today: state::spend_today(&st, &today),
+        spend_total: state::spend_total(&st),
         last_exit: None,
         last_run: None,
+        last_run_epoch: None,
+        last_work_epoch: None,
         last_duration: None,
         last_work_duration: None,
         runs: Vec::new(),
         out_files: 0,
         expect: None,
+        expect_minutes: None,
+        overdue_minutes: None,
         stale: false,
+        held,
+        summary: spec
+            .as_ref()
+            .map(|spec| spec.summary.clone())
+            .unwrap_or_default(),
+        cadence: spec
+            .as_ref()
+            .and_then(|spec| spec.field("cadence"))
+            .map(str::to_string),
+        stages_total: spec.as_ref().map(|spec| spec.stages.len()).unwrap_or(0),
+        agent: None,
+        agent_configured: false,
+        agent_error: None,
+        deliverable: artifact.as_ref().map(|path| path.display().to_string()),
+        deliverable_ok: artifact
+            .as_ref()
+            .map(|path| crate::commands::artifact_today(path, &dir, &today)),
+        memory: memory_pass(&st),
+        heal_last,
+        registered: paths.workdir.is_some(),
+        job_dir: dir.display().to_string(),
     };
+
+    match agent::resolve_config(repo, name) {
+        Ok(profile) if profile.configured => {
+            rec.agent = Some(profile.describe());
+            rec.agent_configured = true;
+        }
+        Ok(_) => {}
+        Err(error) => rec.agent_error = Some(error.to_string()),
+    }
 
     if let Some((when, rc)) = state::last_run_row(&st) {
         rec.last_run = Some(when);
         rec.last_exit = rc;
     }
+    // A hold is the latest run doing no work, not any zero exit today: a job
+    // that held at 05:00 and failed at 07:32 is late, not held.
+    rec.held = held && rec.last_exit == Some(0);
 
     rec.runs = state::run_history(&st, 10);
     if let Some(last) = rec.runs.last() {
@@ -89,7 +164,10 @@ fn job_state(repo: &Path, name: &str) -> JobState {
             rec.last_run = Some(last.end.clone());
         }
     }
-    rec.last_work_duration = state::last_work_run(&st, &rec.runs).map(|run| run.seconds);
+    rec.last_run_epoch = rec.last_run.as_deref().and_then(clock::epoch_of);
+    let work = state::last_work_run(&st, &rec.runs);
+    rec.last_work_duration = work.map(|run| run.seconds);
+    rec.last_work_epoch = work.and_then(|run| clock::epoch_of(&run.end));
 
     let done_today = st.join("done").join(&today).exists();
     if done_today {
@@ -142,19 +220,46 @@ fn job_state(repo: &Path, name: &str) -> JobState {
 
     if let Some((minutes, label)) = state::expect_time(&st) {
         rec.expect = Some(label);
-        let now = clock::now_hm();
-        let now_minutes = now
-            .split_once(':')
-            .and_then(|(h, m)| Some(h.parse::<i64>().ok()? * 60 + m.parse::<i64>().ok()?))
-            .unwrap_or(0);
-        rec.stale = now_minutes >= minutes
-            && !done_today
-            && !locked
-            && !blocked_now
-            && !state::held_today(&st, &today);
+        rec.expect_minutes = Some(minutes);
+        let now_minutes = clock::now_minutes();
+        rec.stale = now_minutes >= minutes && !done_today && !locked && !blocked_now && !rec.held;
+        if rec.stale {
+            rec.overdue_minutes = Some(now_minutes - minutes);
+        }
     }
 
     rec
+}
+
+/// `state/memory-pass.json` (the receipt a job writes at the end of its pass):
+/// age and the number of pages it touched. A missing or damaged receipt is not
+/// an error here — the page says "no receipt" instead.
+fn memory_pass(state: &Path) -> Option<MemoryPass> {
+    let body = state::read_lossy(&state.join("memory-pass.json"));
+    let value: Value = serde_json::from_str(body.trim()).ok()?;
+    let recorded = value.get("recorded_at")?.as_i64()?;
+    let files = value
+        .get("files")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    Some(MemoryPass {
+        age: clock::now_epoch() - recorded,
+        files,
+    })
+}
+
+/// One line of `state/heal/history.tsv`: `<iso> <job> <attempt> <action>
+/// <before> <after> <verdict> <rc> <seconds> <cost> <agent>`.
+fn parse_heal_line(line: &str) -> HealLast {
+    let fields: Vec<&str> = line.split('\t').collect();
+    HealLast {
+        action: fields.get(3).unwrap_or(&"?").to_string(),
+        verdict: fields.get(6).unwrap_or(&"?").to_string(),
+        age: fields
+            .first()
+            .and_then(|iso| clock::epoch_of(iso))
+            .map(|at| clock::now_epoch() - at),
+    }
 }
 
 /// The newest `[when] stage N: what` line in today's log.
@@ -234,6 +339,7 @@ fn to_json(rec: &JobState) -> Value {
         "heal_attempts_today": rec.heal_attempts_today,
         "last_heal": rec.last_heal,
         "spend_today": rec.spend_today,
+        "spend_total": rec.spend_total,
         "last_exit": rec.last_exit,
         "last_run": rec.last_run,
         "last_duration": rec.last_duration,
@@ -241,43 +347,30 @@ fn to_json(rec: &JobState) -> Value {
         "runs": runs,
         "out_files": rec.out_files,
         "expect": rec.expect,
+        "expect_minutes": rec.expect_minutes,
+        "overdue_minutes": rec.overdue_minutes,
         "stale": rec.stale,
+        "held": rec.held,
+        "summary": rec.summary,
+        "cadence": rec.cadence,
+        "stages_total": rec.stages_total,
+        "agent": rec.agent,
+        "agent_configured": rec.agent_configured,
+        "agent_error": rec.agent_error,
+        "deliverable": rec.deliverable,
+        "deliverable_ok": rec.deliverable_ok,
+        "memory_pass": rec.memory.as_ref().map(|pass| json!({
+            "age_seconds": pass.age,
+            "files": pass.files,
+        })),
+        "heal_last": rec.heal_last.as_ref().map(|heal| json!({
+            "action": heal.action,
+            "verdict": heal.verdict,
+            "age_seconds": heal.age,
+        })),
+        "registered": rec.registered,
+        "job_dir": rec.job_dir,
     })
-}
-
-fn html_escape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for c in value.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
-fn runs_html(history: &[state::Run]) -> String {
-    let start = history.len().saturating_sub(5);
-    let recent = &history[start..];
-    if recent.is_empty() {
-        return "—".into();
-    }
-    let mut spans = Vec::new();
-    for run in recent.iter().rev() {
-        let stamp = slice_chars(&run.end, 5, 16).replace('T', " ");
-        spans.push(format!(
-            "<span class='run'>{} {} rc {} {}</span>",
-            html_escape(&stamp),
-            html_escape(&run.verb),
-            run.rc,
-            state::duration_text(Some(run.seconds))
-        ));
-    }
-    spans.join("<br>")
 }
 
 fn slice_chars(value: &str, start: usize, end: usize) -> String {
@@ -286,65 +379,6 @@ fn slice_chars(value: &str, start: usize, end: usize) -> String {
         .skip(start)
         .take(end.saturating_sub(start))
         .collect()
-}
-
-/// The row's CSS class: "ran 2026-10-21" must not become a selector with a
-/// date in it, because the date changes every day.
-fn state_class(state: &str) -> &'static str {
-    match state {
-        "blocked" => "blocked",
-        "running" => "running",
-        "failed" => "failed",
-        "done today" => "done-today",
-        "never run" => "never-run",
-        _ if state.starts_with("ran ") => "ran",
-        _ => "never-run",
-    }
-}
-
-/// The newest run's duration, with the newest run that actually did work in
-/// parentheses when the last tick was a hold. A hold exits immediately, so its
-/// `0s` alone would read as a job that never got going.
-fn duration_cell(last: Option<i64>, work: Option<i64>) -> String {
-    let text = state::duration_text(last);
-    match work {
-        Some(work) if Some(work) != last => format!(
-            "{} <span class='work'>(work {})</span>",
-            text,
-            state::duration_text(Some(work))
-        ),
-        _ => text,
-    }
-}
-
-fn html_table(data: &[JobState]) -> String {
-    let mut rows = Vec::new();
-    for rec in data {
-        let class = state_class(&rec.state);
-        let stage = if rec.stage.is_empty() {
-            "—".to_string()
-        } else {
-            html_escape(&rec.stage)
-        };
-        rows.push(format!(
-            "<tr class='{class}'><td><b>{}</b></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{} / {}</td><td>{}</td></tr>",
-            html_escape(&rec.name),
-            html_escape(&rec.state),
-            html_escape(&rec.detail),
-            stage,
-            html_escape(rec.last_run.as_deref().unwrap_or("—")),
-            duration_cell(rec.last_duration, rec.last_work_duration),
-            runs_html(&rec.runs),
-            rec.attempts_today,
-            rec.attempts_total,
-            rec.heal_attempts_today
-        ));
-    }
-    if rows.is_empty() {
-        "<tr><td colspan=9>no jobs yet</td></tr>".into()
-    } else {
-        rows.join("\n")
-    }
 }
 
 /// Greedy wrap at `width` characters; one long word is left long rather than
@@ -528,6 +562,7 @@ fn print_detail(root: &Path, rec: &JobState) {
 struct Args {
     json: bool,
     html: Option<String>,
+    open: bool,
     name: Option<String>,
     all: bool,
     detail: bool,
@@ -541,6 +576,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         match arg.as_str() {
             "--json" => args.json = true,
             "--all" => args.all = true,
+            "--open" => args.open = true,
             "--html" => {
                 let Some(value) = argv.get(i + 1) else {
                     return Err("--html needs a value".into());
@@ -563,6 +599,21 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         i += 1;
     }
     Ok(args)
+}
+
+/// `--open` is a convenience, not a gate: the page is already on disk, so a
+/// missing `open`/`xdg-open` warns and still exits 0.
+fn open_page(path: &Path) {
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    match std::process::Command::new(program).arg(path).status() {
+        Ok(status) if status.success() => {}
+        Ok(status) => eprintln!("report: {program} exited {status}"),
+        Err(error) => eprintln!("report: cannot run {program}: {error}"),
+    }
 }
 
 pub fn run(argv: &[String]) -> i32 {
@@ -599,26 +650,7 @@ pub fn run(argv: &[String]) -> i32 {
     }
 
     if let Some(path) = args.html {
-        let page = format!(
-            "<!doctype html><meta charset=utf-8>\n\
-             <title>LightsOut</title>\n\
-             <style>\n\
-             body{{font:15px/1.5 -apple-system,system-ui,sans-serif;margin:2rem;color:#1b1b1b}}\n\
-             table{{border-collapse:collapse;width:100%}}\n\
-             th,td{{text-align:left;padding:.5rem .75rem;border-bottom:1px solid #e5e5e5;vertical-align:top}}\n\
-             th{{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:#666}}\n\
-             tr.blocked{{background:#fdeceb}} tr.blocked td:nth-child(2){{color:#b42318;font-weight:600}}\n\
-             tr.running{{background:#fff8e6}} tr.failed{{background:#fff3cd}} tr.failed td:nth-child(2){{color:#b54708}}\n\
-             tr.done-today td:nth-child(2){{color:#087443}}\n\
-             tr.ran td:nth-child(2){{color:#555}}\n\
-             span.run, span.work{{font-size:.85rem;color:#555}}\n\
-             caption{{text-align:left;font-weight:600;margin-bottom:.75rem}}\n\
-             </style><table><caption>LightsOut — {}</caption>\n\
-             <tr><th>job</th><th>state</th><th>why</th><th>stage</th><th>last run</th><th>duration</th><th>last 5 runs</th><th>attempts today / total</th><th>heals</th></tr>\n\
-             {}</table>",
-            clock::format_epoch(clock::now_epoch(), "%Y-%m-%d %H:%M"),
-            html_table(&data)
-        );
+        let page = crate::report::render(&data, &repo);
         let out = PathBuf::from(&path);
         if let Some(parent) = out.parent() {
             if !parent.as_os_str().is_empty() {
@@ -633,6 +665,9 @@ pub fn run(argv: &[String]) -> i32 {
             return 1;
         }
         println!("{path}");
+        if args.open {
+            open_page(&out);
+        }
         return 0;
     }
 

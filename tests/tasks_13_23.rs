@@ -535,16 +535,16 @@ fn t17_run_history() {
     let body = s.read("out/history.html");
     c.is_true(
         "the page names the duration",
-        body.contains("<th>duration</th>"),
+        body.contains(">duration</th>"),
     );
     c.is_true(
         "the page names the last 5 runs",
-        body.contains("<th>last 5 runs</th>"),
+        body.contains(">last 10</th>"),
     );
     c.check(
-        "the page renders five recent runs",
-        5,
-        body.matches("class='run'").count(),
+        "the page renders ten recent runs",
+        10,
+        body.matches("class=\"rd ").count(),
     );
     c.finish(17);
 }

@@ -29,7 +29,9 @@ pub const USAGE: &str = "usage: lightsout [--workspace DIR] <verb> [name]
   status [name] [--detail]
                        state from files (the table); a name or --detail prints
                        the spec, schedule, stages and runs; --json for machines
-  report [--html PATH] the dashboard page (same data as status)
+  report [--html PATH] [--open]
+                       the dashboard page (same data as status); --open shows
+                       the page in the browser after writing it
   check [name]         alarm when an expected run never happened: notifies once
                        per job per day and exits 2 if a missed run is blocked
   plan <name>          what would run now; touches nothing
@@ -438,6 +440,74 @@ fn check_job(paths: &Paths, check_log: &Path) -> Check {
     }
     println!("stale: {name} (expected {expect})");
     Check::Stale
+}
+
+/// Whether a file matching `pattern` (relative to the job directory) was
+/// written today. `*` and `?` match within a file name, which is all a
+/// deliverable pattern needs; the directory part is literal.
+pub(crate) fn artifact_today(pattern: &Path, job_dir: &Path, today: &str) -> bool {
+    let full = if pattern.is_absolute() {
+        pattern.to_path_buf()
+    } else {
+        job_dir.join(pattern)
+    };
+    let Some(name) = full.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let dir = full.parent().unwrap_or(Path::new("."));
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(candidate) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !wildcard_match(name, candidate) {
+            continue;
+        }
+        let Ok(modified) = fs::metadata(&path).and_then(|meta| meta.modified()) else {
+            continue;
+        };
+        let epoch = modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|gap| gap.as_secs() as i64)
+            .unwrap_or(0);
+        if clock::format_epoch(epoch, "%Y-%m-%d") == today {
+            return true;
+        }
+    }
+    false
+}
+
+/// `*` matches any run of characters and `?` one character; everything else is
+/// literal. A two-pointer scan, so a pattern never causes backtracking blow-up.
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let text: Vec<char> = text.chars().collect();
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let mut star: Option<usize> = None;
+    let mut mark = 0usize;
+    while ti < text.len() {
+        if pi < pattern.len() && (pattern[pi] == '?' || pattern[pi] == text[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < pattern.len() && pattern[pi] == '*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(at) = star {
+            pi = at + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < pattern.len() && pattern[pi] == '*' {
+        pi += 1;
+    }
+    pi == pattern.len()
 }
 
 /// The alarm uses the one channel list jobs use: `lib/notify.sh` through
@@ -1527,4 +1597,21 @@ pub fn unblock(repo: &Path, name: &str) -> i32 {
         println!("{} was not blocked", paths.name);
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wildcard_matches_a_file_name() {
+        assert!(wildcard_match("*-master.mp4", "031-master.mp4"));
+        assert!(!wildcard_match("*-master.mp4", "031-cover.jpg"));
+        assert!(wildcard_match("0??-master.mp4", "031-master.mp4"));
+        assert!(!wildcard_match("0??-master.mp4", "031-master.mp4.bak"));
+        assert!(wildcard_match("a*b*c", "aXbYc"));
+        assert!(wildcard_match("*", "anything"));
+        assert!(!wildcard_match("a*", "ba"));
+        assert!(!wildcard_match("", "x"));
+    }
 }

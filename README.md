@@ -28,7 +28,8 @@ This repository builds them once.
 - **Universal mode** — register a job directory by name, and `run`, `status`,
   `check` and `heal` resolve it from anywhere; `schedule` prints the cron line
   or launchd plist. `docs/universal.md`
-- **Visibility** — `bin/report` renders every job's state from its state files.
+- **Visibility** — `bin/report` renders a dashboard from the state files: what
+  needs a person, the run trend, due times, spend and a per-job detail panel.
 
 ## Install
 
@@ -59,7 +60,7 @@ bin/job list                       # jobs that exist
 bin/job status --all               # one table, red rows first
 bin/job status --all --json        # same data for a page or a reminder
 bin/job run noop                   # run the fixture job
-bin/report --html out/status.html  # static page, no server
+bin/report --html out/status.html --open  # static page, no server
 ```
 
 ## Product and workspace
