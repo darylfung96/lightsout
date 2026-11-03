@@ -15,7 +15,7 @@ letting any job write notes.
 - **State is files under `jobs/<name>/state/`.** No database, no hidden cache.
   If `bin/job status` cannot explain a job, the job is wrong.
 - **Scripts before agents.** Anything checkable becomes a gate, not a sentence
-  in a prompt. See `~/agent-memory/shared/deterministic-first.md`.
+  in a prompt. See `~/agent-memory/framework/deterministic-first.md`.
 - **An agent step is staged, gated, and never retried.** See `docs/agent-step.md`.
 - **The agent model is a profile, not a runtime guess.** `jobs/<name>/agent.conf`
   pins the runner and model, `agents.conf` holds named profiles, and both the
@@ -32,7 +32,7 @@ letting any job write notes.
 ## Memory (full durable-memory suite)
 
 This repository follows `~/agent-memory` conventions, because the memory pass and the wiki both run out of that store. Owner pages:
-`~/agent-memory/shared/memory-update-policy.md` (steps 0–5),
+`~/agent-memory/framework/memory-update-policy.md` (steps 0–5),
 `memory-auto-index-policy.md` (which collection owns a fact),
 `wiki-policy.md` (page schema), `deterministic-first.md`.
 
@@ -49,7 +49,7 @@ This repository follows `~/agent-memory` conventions, because the memory pass an
   `memory-pass-check.py` instead. A failed pass is a blocked job, not a warning.
 - Durability is judgment: balances, build IDs and take numbers belong in a
   progress file, not in memory.
-- Search: `~/agent-memory/qmd-mem.sh search "<terms>" -c lightsout` (needs file
+- Search: `~/agent-memory/qmd-mem.sh search "<terms>" -c mac-automation` (needs file
   access outside the workspace sandbox, so run it unsandboxed).
 
 <!-- wiki: decisions=05-standing-decisions.md active=10-active.md -->
