@@ -75,10 +75,10 @@ output as it arrives. The listener is loopback only, and a POST needs the
 ## Product and workspace
 
 This checkout is the product, so the manager, the libraries `lightsout init`
-writes, the `noop` fixture and the test fixtures all live here. The
-maintainer's jobs live in `~/programming/mac-automation`, which is why a clone
-contains no automations. `lightsout init <dir>` writes the same layout into a
-new directory, and `<dir>/jobs/<name>/` is where a job goes.
+writes, the `noop` fixture and the test fixtures all live here. Your own jobs
+live in your own workspace, which is why a clone of this repository contains no
+automations. `lightsout init <dir>` writes the same layout into a new
+directory, and `<dir>/jobs/<name>/` is where a job goes.
 
 ## Layout
 
