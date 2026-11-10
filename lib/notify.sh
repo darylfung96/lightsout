@@ -7,7 +7,8 @@
 #      file is the record even when every delivery fails;
 #   2. each configured channel is then tried with a 5-second timeout — the
 #      command in $U_NOTIFY_CMD (title and body appended as arguments), a JSON
-#      POST to $U_NOTIFY_WEBHOOK, and the desktop through osascript;
+#      POST to $U_NOTIFY_WEBHOOK, and the desktop through osascript (macOS) or
+#      notify-send (Linux);
 #   3. a channel that fails or hangs is forgotten. A notification is never a
 #      reason for a job to fail, so nothing in this file returns non-zero.
 # U_NOTIFY=0 silences the channels; the alert line is still written, because a
@@ -82,16 +83,21 @@ urllib.request.urlopen(req, timeout=5).read()' "$url" "$payload" || true
   return 0
 }
 
-# _u_notify_desktop <title> <body> — the fallback every Mac has.
+# _u_notify_desktop <title> <body> — the desktop channel the machine has.
+# macOS ships osascript; a Linux desktop has notify-send. Neither is required,
+# because the alert file and the other channels already carry the message.
 _u_notify_desktop() {
   local title="$1" body="$2"
-  command -v osascript >/dev/null 2>&1 || return 0
   body="${body//$'\t'/ }"; body="${body//$'\n'/ }"
   title="${title//$'\t'/ }"; title="${title//$'\n'/ }"
-  body="${body//\\/\\\\}"; body="${body//\"/\\\"}"
-  title="${title//\\/\\\\}"; title="${title//\"/\\\"}"
-  _u_notify_timeout 5 osascript \
-    -e "display notification \"$body\" with title \"$title\"" || true
+  if command -v osascript >/dev/null 2>&1; then
+    local quoted_body="${body//\\/\\\\}" quoted_title="${title//\\/\\\\}"
+    quoted_body="${quoted_body//\"/\\\"}"; quoted_title="${quoted_title//\"/\\\"}"
+    _u_notify_timeout 5 osascript \
+      -e "display notification \"$quoted_body\" with title \"$quoted_title\"" || true
+  elif command -v notify-send >/dev/null 2>&1; then
+    _u_notify_timeout 5 notify-send "$title" "$body" || true
+  fi
   return 0
 }
 

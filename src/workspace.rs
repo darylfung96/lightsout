@@ -567,11 +567,20 @@ pub fn doctor(root: &Path) -> i32 {
         }
     }
 
+    // The desktop notification channel is the machine's own tool, so the check
+    // names the one this platform would use instead of assuming macOS.
     #[cfg(target_os = "macos")]
     if repo::which("osascript").is_none() {
         warning(
             &mut warnings,
             "osascript is missing; desktop notifications will be skipped",
+        );
+    }
+    #[cfg(target_os = "linux")]
+    if repo::which("notify-send").is_none() {
+        warning(
+            &mut warnings,
+            "notify-send is missing; desktop notifications will be skipped",
         );
     }
 
