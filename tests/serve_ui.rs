@@ -63,6 +63,37 @@ fn fixture(tag: &str) -> Fixture {
         .next()
         .and_then(|port| port.parse().ok())
         .unwrap_or_else(|| panic!("no port in {line:?}"));
+    // A server that printed its URL still has to answer: wait for the listener
+    // so a slow start is not read as a broken page.
+    let mut last = String::new();
+    let mut answered = false;
+    for _ in 0..40 {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(_) => {
+                answered = true;
+                break;
+            }
+            Err(error) => {
+                last = error.to_string();
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+    }
+    if !answered {
+        let status = child.try_wait();
+        let mut said = String::new();
+        if let Some(mut stderr) = stderr {
+            let _ = stderr.read_to_string(&mut said);
+            eprintln!("serve stderr:\n{said}");
+            return Fixture {
+                root,
+                child,
+                stderr: None,
+                port,
+            };
+        }
+        panic!("serve never answered on {port}: {last}; child {status:?}");
+    }
     Fixture {
         root,
         child,
