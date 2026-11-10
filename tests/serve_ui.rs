@@ -63,15 +63,25 @@ fn fixture(tag: &str) -> Fixture {
         .next()
         .and_then(|port| port.parse().ok())
         .unwrap_or_else(|| panic!("no port in {line:?}"));
-    // A server that printed its URL still has to answer: wait for the listener
-    // so a slow start is not read as a broken page.
+    // A server that printed its URL still has to answer. The probe is a real
+    // request: a connect-then-drop would hand the server an empty one.
     let mut last = String::new();
     let mut answered = false;
     for _ in 0..40 {
         match TcpStream::connect(("127.0.0.1", port)) {
-            Ok(_) => {
-                answered = true;
-                break;
+            Ok(mut stream) => {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let probe = format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+                if stream.write_all(probe.as_bytes()).is_ok() {
+                    let mut said = String::new();
+                    if stream.read_to_string(&mut said).is_ok() && said.starts_with("HTTP/1.1 200")
+                    {
+                        answered = true;
+                        break;
+                    }
+                    last = said.lines().next().unwrap_or("no response").to_string();
+                }
+                std::thread::sleep(Duration::from_millis(25));
             }
             Err(error) => {
                 last = error.to_string();

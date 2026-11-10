@@ -81,8 +81,29 @@ impl Action {
     }
 }
 
+/// A browser that closes a tab mid-response is normal, and a write to that
+/// socket raises `SIGPIPE`. The CLI restores the default action so a pipeline
+/// like `status | head` dies quietly, but a server must survive it: the
+/// descriptor is the only thing that broke, not the dashboard.
+#[cfg(unix)]
+fn ignore_sigpipe() {
+    extern "C" {
+        fn signal(sig: i32, handler: usize) -> usize;
+    }
+    const SIGPIPE: i32 = 13;
+    const SIG_IGN: usize = 1;
+    // SAFETY: only the ignore disposition is installed for one signal.
+    unsafe {
+        signal(SIGPIPE, SIG_IGN);
+    }
+}
+
+#[cfg(not(unix))]
+fn ignore_sigpipe() {}
+
 /// `lightsout serve [--port N] [--open]`
 pub fn run(repo: &Path, argv: &[String]) -> i32 {
+    ignore_sigpipe();
     let mut port = DEFAULT_PORT;
     let mut open = false;
     let mut index = 0;
@@ -453,20 +474,28 @@ impl Server {
             }
         };
 
+        let mut readers = Vec::new();
         if let Some(stdout) = child.stdout.take() {
             let action = Arc::clone(&action);
-            thread::spawn(move || pump(stdout, &action));
+            readers.push(thread::spawn(move || pump(stdout, &action)));
         }
         if let Some(stderr) = child.stderr.take() {
             let action = Arc::clone(&action);
-            thread::spawn(move || pump(stderr, &action));
+            readers.push(thread::spawn(move || pump(stderr, &action)));
         }
+        // The exit status is not the end of the action: the pipes still hold
+        // whatever the child wrote last, so `running:false` is published only
+        // once both readers have drained. Otherwise the page can show an exit
+        // code with an empty output.
         let finished = Arc::clone(&action);
         thread::spawn(move || {
             let rc = match child.wait() {
                 Ok(status) => status.code().unwrap_or(1),
                 Err(_) => 1,
             };
+            for reader in readers {
+                let _ = reader.join();
+            }
             finished.done.store(rc, Ordering::Relaxed);
         });
         Ok(action)
