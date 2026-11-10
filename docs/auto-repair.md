@@ -176,6 +176,16 @@ resolved, sits in the wrong place or repeats a name is refused with
 `invalid:scope` and no proposal is requested, because a repair that would be
 refused anyway is not worth a model call.
 
+A job whose `repair.allow` cannot reach its own deliverable is refused the same
+way, and sooner. When `state/expect` names a deliverable outside the job, and
+every scope is inside the job, a proposal may only write the job's `out/`, which
+no judged stage reads. `book-lessons` answered exactly that on 2026-11-10 after
+a full model call: "no edit under the job's out/ can move this gate". The
+manager now compares the deliverable with the scope list first, prints the entry
+that would close the gap (`books=/Users/me/library/books`), records
+`invalid:scope`, and never calls the runner. `doctor` warns about the same gap
+before the job blocks.
+
 
 After the attempt the manager compares the new block's failure key with the old
 one, because that comparison is the only evidence of progress. A different key

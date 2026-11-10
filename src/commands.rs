@@ -1092,6 +1092,26 @@ fn agent_attempt(
         eprintln!("heal: {error}");
         return 2;
     }
+    // A job whose deliverable is outside every scope can only be answered
+    // "unfixable", so say it here instead of paying for the answer.
+    if let Some(gap) = heal::scope_gap(&paths.dir) {
+        record_heal(
+            paths,
+            &attempt,
+            action,
+            &before,
+            &before,
+            "invalid:scope",
+            2,
+        );
+        println!(
+            "heal: repair.allow cannot reach this job's deliverable: {}",
+            gap.deliverable
+        );
+        println!("heal: add a scope for it, e.g.  {}", gap.scope);
+        println!("heal: docs/auto-repair.md explains both scope forms");
+        return 2;
+    }
     attempt.agent = Some(agent_label.clone());
     lock.refresh();
     println!("heal: agent {agent_label}");

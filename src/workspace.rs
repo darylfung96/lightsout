@@ -584,9 +584,33 @@ pub fn doctor(root: &Path) -> i32 {
         );
     }
 
+    check_repair_scopes(root, &mut warnings);
     check_registry(root, &mut errors);
 
     finish(errors, warnings)
+}
+
+/// A job whose `repair.allow` cannot reach its deliverable would spend a model
+/// call to say "unfixable"; name the gap before the job blocks.
+fn check_repair_scopes(root: &Path, warnings: &mut usize) {
+    let mut names = repo::job_names(root);
+    for name in crate::registry::names() {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    for name in names {
+        let paths = crate::repo::Paths::new(root, &name);
+        if let Some(gap) = crate::heal::scope_gap(&paths.dir) {
+            warning(
+                warnings,
+                &format!(
+                    "{name}: repair.allow cannot reach its deliverable ({}); add  {}",
+                    gap.deliverable, gap.scope
+                ),
+            );
+        }
+    }
 }
 
 /// Registered jobs are checked from any workspace, because a name that

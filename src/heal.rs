@@ -278,6 +278,66 @@ enum Scope {
     External { name: String, root: PathBuf },
 }
 
+/// A repair that cannot win: the deliverable `state/expect` names lives outside
+/// the job, and every scope is inside the job, so a proposal may only write the
+/// job's own `out/` — a directory no stage reads for the thing being judged.
+///
+/// `book-lessons` failed this way on 2026-11-10: its `repair.allow` was `out/`
+/// while the chapter and its render lived under a separate library checkout, so
+/// the agent spent a call to answer "no edit under the job's out/ can move this
+/// gate". The manager can say that in microseconds instead.
+pub struct ScopeGap {
+    pub deliverable: String,
+    /// A `name=/absolute/dir` entry that would reach the deliverable.
+    pub scope: String,
+}
+
+pub fn scope_gap(job_dir: &Path) -> Option<ScopeGap> {
+    let pattern = crate::state::expect_artifact(&job_dir.join("state"))?;
+    let deliverable = pattern.to_string_lossy().into_owned();
+    let outside = pattern.is_absolute() || deliverable.starts_with("..");
+    if !outside {
+        return None;
+    }
+    // An external scope may already reach it, which is the everyday-laws shape.
+    if allow_entries(job_dir)
+        .iter()
+        .any(|entry| entry.to_string_lossy().contains('='))
+    {
+        return None;
+    }
+    Some(ScopeGap {
+        scope: suggested_scope(&deliverable),
+        deliverable,
+    })
+}
+
+/// `books=/Users/me/library/books` for a deliverable the agent names as
+/// `/Users/me/library/books/*/*/out/episode.mp4`: the deepest fixed part is the
+/// root, and its last component is the name to write.
+fn suggested_scope(deliverable: &str) -> String {
+    let mut root = String::new();
+    let mut name = "artifacts".to_string();
+    for part in deliverable.split('/') {
+        if part.is_empty() {
+            root.push('/');
+            continue;
+        }
+        if part.contains('*') || part.contains('?') {
+            break;
+        }
+        if !root.ends_with('/') && !root.is_empty() {
+            root.push('/');
+        }
+        root.push_str(part);
+        name = part.to_string();
+    }
+    if root.trim_matches('/').is_empty() {
+        return "artifacts=<absolute dir>".into();
+    }
+    format!("{name}={root}")
+}
+
 /// Turn the entries into scopes, refusing anything that could reach the
 /// workspace's own code. An external root may be anywhere except inside the
 /// workspace or above it, because either would let a repair edit `job.sh`,
@@ -1617,6 +1677,56 @@ mod tests {
         assert_eq!(restored, 2);
         assert_eq!(fs::read_to_string(dir.join("out/a.txt")).unwrap(), "before");
         assert!(!dir.join("out/new.txt").exists());
+    }
+
+    fn scope_job(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("lightsout-scope-gap-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("state")).unwrap();
+        fs::write(dir.join("job.sh"), "#!/bin/sh\n").unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_deliverable_outside_an_in_job_scope_is_a_gap() {
+        let dir = scope_job("outside");
+        fs::write(
+            dir.join("state/expect"),
+            "09:30\n/Users/me/library/books/*/*/out/episode.mp4\n",
+        )
+        .unwrap();
+        fs::write(dir.join("repair.allow"), "out/\n").unwrap();
+        let gap = scope_gap(&dir).expect("a gap is detected");
+        assert!(gap.deliverable.ends_with("episode.mp4"));
+        assert_eq!(gap.scope, "books=/Users/me/library/books");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_external_scope_closes_the_gap() {
+        let dir = scope_job("external");
+        fs::write(
+            dir.join("state/expect"),
+            "09:30\n/Users/me/library/books/x.mp4\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("repair.allow"),
+            "out/\nbooks=/Users/me/library/books\n",
+        )
+        .unwrap();
+        assert!(scope_gap(&dir).is_none(), "an external scope may reach it");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_deliverable_inside_the_job_is_not_a_gap() {
+        let dir = scope_job("inside");
+        fs::write(dir.join("state/expect"), "09:30\nout/*.mp4\n").unwrap();
+        fs::write(dir.join("repair.allow"), "out/\n").unwrap();
+        assert!(scope_gap(&dir).is_none());
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

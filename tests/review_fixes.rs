@@ -819,6 +819,44 @@ fn an_unusable_scope_is_refused_before_the_runner_is_called() {
 }
 
 #[test]
+fn a_deliverable_outside_every_scope_is_refused_before_the_runner_is_called() {
+    let s = Sandbox::new("rf-scope-gap");
+    block_ready(&s);
+    s.write("triage.conf", "ready * agent:apply\n");
+    s.write(
+        "jobs/ready/state/expect",
+        "06:00\n/Users/me/library/books/*/*/out/episode.mp4\n",
+    );
+    s.write("jobs/ready/repair.allow", "out/\n");
+    let calls = s.path("agent-calls.log").to_string_lossy().into_owned();
+    let out = s.run_env(
+        &["heal", "ready"],
+        &[("U_RUNNER", "fake"), ("FAKE_AGENT_LOG", &calls)],
+    );
+
+    assert_eq!(code(&out), 2, "the gap refuses: {}", combined(&out));
+    assert!(
+        combined(&out).contains("cannot reach this job's deliverable"),
+        "the conflict is named: {}",
+        combined(&out)
+    );
+    assert!(
+        combined(&out).contains("books=/Users/me/library/books"),
+        "the scope to add is printed: {}",
+        combined(&out)
+    );
+    assert!(
+        !std::path::Path::new(&calls).exists(),
+        "the runner must not be called when no edit can move the gate"
+    );
+    let history = s.read("jobs/ready/state/heal/history.tsv");
+    assert!(
+        history.contains("invalid:scope"),
+        "the verdict is recorded: {history}"
+    );
+}
+
+#[test]
 fn an_unguarded_exit_one_writes_a_crash_block() {
     let s = Sandbox::new("rf-crash-block");
     s.mkdir("jobs/ready/state");
