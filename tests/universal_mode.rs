@@ -53,7 +53,10 @@ fn isolated_run(
         .env("U_MEMORY", "0")
         .env("PATH", env::var_os("PATH").unwrap_or_default())
         .env_remove("LIGHTSOUT_REPO")
-        .env_remove("LIGHTSOUT_HOME");
+        .env_remove("LIGHTSOUT_HOME")
+        // The registry prefers XDG_CONFIG_HOME over HOME, so a developer or a
+        // CI image that sets it would point this run at another registry.
+        .env_remove("XDG_CONFIG_HOME");
     cmd.args(args);
     cmd.output().expect("run isolated lightsout")
 }
@@ -83,8 +86,10 @@ fn a_command_job_runs_from_outside_any_workspace() {
     assert_eq!(
         code(&out),
         0,
-        "a registered job runs without a workspace: {}",
-        combined(&out)
+        "a registered job runs without a workspace: {} (xdg={:?}, registry={})",
+        combined(&out),
+        env::var("XDG_CONFIG_HOME").ok(),
+        registry_home(&s).display()
     );
     assert!(
         job_dir(&s, "backup").join("ran.txt").is_file(),
