@@ -220,11 +220,7 @@ impl Sandbox {
     }
 
     pub fn write(&self, rel: &str, body: &str) {
-        let path = self.path(rel);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(path, body).unwrap();
+        publish(&self.path(rel), body.as_bytes());
     }
 
     pub fn touch(&self, rel: &str) {
@@ -462,8 +458,33 @@ pub fn date_arg(format: &str) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+/// A path beside `path` that no other test thread uses, so a finished file can
+/// be renamed into place instead of written in place.
+fn staging(path: &Path) -> PathBuf {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    parent.join(format!(".{name}.{}.{unique}.staging", std::process::id()))
+}
+
+/// Write a file through a staging path and a rename. Linux refuses to execute a
+/// file that is open for writing in any process, and a fork taken while another
+/// test thread is writing inherits that descriptor; a file that is only ever
+/// renamed into place is never open for writing under its final name.
+fn publish(path: &Path, body: &[u8]) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    let staging = staging(path);
+    fs::write(&staging, body).unwrap();
+    fs::rename(&staging, path).unwrap();
+}
+
 pub fn write_exec(path: &Path, body: &str) {
-    fs::write(path, body).unwrap();
+    publish(path, body.as_bytes());
     make_executable(path);
 }
 
@@ -497,9 +518,11 @@ pub fn copy_file(from: &Path, to: &Path) {
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).unwrap();
     }
-    fs::copy(from, to)
+    let staging = staging(to);
+    fs::copy(from, &staging)
         .unwrap_or_else(|e| panic!("copy {} -> {}: {e}", from.display(), to.display()));
-    make_executable(to);
+    make_executable(&staging);
+    fs::rename(&staging, to).unwrap();
 }
 
 pub fn copy_tree(from: &Path, to: &Path) {
@@ -510,8 +533,7 @@ pub fn copy_tree(from: &Path, to: &Path) {
         if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             copy_tree(&path, &target);
         } else {
-            fs::copy(&path, &target).unwrap();
-            make_executable(&target);
+            copy_file(&path, &target);
         }
     }
 }
