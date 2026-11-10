@@ -155,7 +155,7 @@ repository gets a bounded write scope:
 
 ```
 out/
-episodes=/Users/me/programming/video-automation/episodes
+episodes=/data/media/episodes
 ```
 
 The agent still writes `episodes/030/lesson-raw.md`; the manager maps the first

@@ -16,7 +16,7 @@ set -euo pipefail
 . "$REPO/lib/guards.sh"
 . "$REPO/lib/memory.sh"
 
-VIDEO_REPO="${VIDEO_REPO:-$HOME/programming/video-automation}"
+VIDEO_REPO="${VIDEO_REPO:-$HOME/projects/media-pipeline}"
 case "$VIDEO_REPO" in
   /*) ;;
   *)  VIDEO_REPO="$PWD/$VIDEO_REPO" ;;

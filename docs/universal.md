@@ -7,10 +7,14 @@ name and `run`, `status`, `check`, `triage`, `heal` and `diagnose` resolve that
 name from anywhere:
 
 ```sh
-lightsout job add backup --command 'rsync -a ~/work /Volumes/backup/work'
+lightsout job add backup --command 'rsync -a ~/work /mnt/backup/work'
 lightsout run backup
 lightsout schedule backup --at 02:30
 ```
+
+`/mnt/backup` stands for the mount point of the backup disk; on macOS that is
+usually `/Volumes/<name>`, on Linux `/mnt/<name>` or `/run/media/<you>/<name>`.
+Nothing in the job cares which, because the path is written once in `job.sh`.
 
 The registry is `$LIGHTSOUT_HOME/jobs.json`, and `LIGHTSOUT_HOME` defaults to
 `~/.config/lightsout`. `job add` initializes that home with the same embedded
@@ -65,7 +69,7 @@ The generated `job.sh` is small on purpose:
 set -euo pipefail
 . "${LIGHTSOUT_LIB:-$REPO/lib}/guards.sh"
 u_say "command job: backup"
-rsync -a ~/work /Volumes/backup/work
+rsync -a ~/work /mnt/backup/work
 u_done
 ```
 

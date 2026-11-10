@@ -84,7 +84,11 @@ pub fn run(root: &Path, argv: &[String]) -> i32 {
     };
     let binary = binary_path();
     if launchd {
-        println!("{}", plist(&name, &paths, &binary, hour, minute, auto));
+        let path_env = scheduled_path();
+        println!(
+            "{}",
+            plist(&name, &paths, &binary, hour, minute, auto, &path_env)
+        );
     } else {
         println!("{}", cron(&name, &binary, hour, minute, auto));
     }
@@ -148,6 +152,17 @@ fn cron_command(name: &str, binary: &Path, auto: bool) -> String {
     parts.join(" ")
 }
 
+/// The PATH a scheduled job should see. launchd starts a job with a bare
+/// environment, so the generated file carries the PATH of the shell that ran
+/// `schedule`: that is where this person's `lightsout`, `python3` and `ffmpeg`
+/// actually are. The fixed list is only the fallback for an empty environment.
+fn scheduled_path() -> String {
+    env::var("PATH")
+        .ok()
+        .filter(|path| !path.is_empty())
+        .unwrap_or_else(|| "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".into())
+}
+
 fn plist(
     name: &str,
     paths: &repo::Paths,
@@ -155,6 +170,7 @@ fn plist(
     hour: u32,
     minute: u32,
     auto: bool,
+    path_env: &str,
 ) -> String {
     let home = registry::home();
     let log = home.join("logs").join(format!("{name}.log"));
@@ -165,8 +181,9 @@ fn plist(
         ""
     };
     let mut environment = format!(
-        "    <key>HOME</key>\n    <string>{}</string>\n    <key>PATH</key>\n    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>\n",
-        xml_escape(&env::var("HOME").unwrap_or_default())
+        "    <key>HOME</key>\n    <string>{}</string>\n    <key>PATH</key>\n    <string>{}</string>\n",
+        xml_escape(&env::var("HOME").unwrap_or_default()),
+        xml_escape(path_env)
     );
     environment.push_str(&format!(
         "    <key>LIGHTSOUT_HOME</key>\n    <string>{}</string>\n",
@@ -266,10 +283,34 @@ mod tests {
         let paths = repo::Paths::new(Path::new("/tmp/office"), "backup");
         let binary = Path::new("/usr/local/bin/lightsout");
 
-        let plain = plist("backup", &paths, binary, 2, 30, false);
+        let path_env = "/custom/bin:/usr/bin";
+        let plain = plist("backup", &paths, binary, 2, 30, false, path_env);
         assert!(!plain.contains("--auto-repair"));
 
-        let armed = plist("backup", &paths, binary, 2, 30, true);
+        let armed = plist("backup", &paths, binary, 2, 30, true, path_env);
         assert!(armed.contains("<string>--auto-repair</string>"));
+    }
+
+    #[test]
+    fn the_plist_carries_the_callers_path() {
+        let paths = repo::Paths::new(Path::new("/tmp/office"), "backup");
+        let binary = Path::new("/usr/local/bin/lightsout");
+        let made = plist(
+            "backup",
+            &paths,
+            binary,
+            2,
+            30,
+            false,
+            "/opt/local/bin:/usr/bin",
+        );
+        assert!(
+            made.contains("<string>/opt/local/bin:/usr/bin</string>"),
+            "the scheduled job sees the caller's tools: {made}"
+        );
+        assert!(
+            !made.contains("/opt/homebrew/bin"),
+            "no machine's PATH is baked in"
+        );
     }
 }

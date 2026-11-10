@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# everyday-laws — the Everyday Laws video job, ported from ../video-automation.
+# everyday-laws — an example daily video job over a separate pipeline checkout.
 #
 # This job is the clock the launchd daily build has been missing: the same
 # pipeline, with LightsOut's day guard, lock, attempt cap, disk guard and gates
@@ -15,7 +15,7 @@
 # rehearsal set AUTOPOST=0 (the driver then leaves the episode built and
 # unposted); set U_MEMORY=0 to rehearse without touching ~/agent-memory.
 #
-# VIDEO_REPO is the driver's checkout (default ~/programming/video-automation).
+# VIDEO_REPO is the driver's checkout (default ~/projects/media-pipeline).
 # `bin/job plan` answers the episode question from that checkout read-only: it
 # must not write there or start the driver's services. A real run asks
 # `daily-build.sh --preflight`, so the driver still owns the episode rule.
@@ -25,7 +25,7 @@ set -euo pipefail
 . "$REPO/lib/guards.sh"
 . "$REPO/lib/memory.sh"
 
-VIDEO_REPO="${VIDEO_REPO:-$HOME/programming/video-automation}"
+VIDEO_REPO="${VIDEO_REPO:-$HOME/projects/media-pipeline}"
 case "$VIDEO_REPO" in
   /*) ;;
   *)  VIDEO_REPO="$PWD/$VIDEO_REPO" ;;
