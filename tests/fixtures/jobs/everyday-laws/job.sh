@@ -225,7 +225,7 @@ fi
 if [ "$DRY" = 0 ]; then
   newest_master=$(ls -t "$VIDEO_REPO"/outbox/[0-9][0-9][0-9]-master.mp4 2>/dev/null | head -1 || true)
   if [ -n "$newest_master" ]; then
-    master_age_h=$(( ($(date +%s) - $(stat -f %m "$newest_master")) / 3600 ))
+    master_age_h=$(( ($(date +%s) - $(date -r "$newest_master" +%s)) / 3600 ))
     if [ "$(date -r "$newest_master" +%F)" = "$(date +%F)" ] || [ "$master_age_h" -lt 20 ]; then
       u_held "a master was built ${master_age_h}h ago (${newest_master##*/}) — one per day"
     fi
