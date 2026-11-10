@@ -22,7 +22,6 @@ include = [
     "triage.conf",
     "agents.conf",
     "jobs/noop/job.sh",
-    "notes/**/*",
     "spec/**/*",
     "bin/job",
     "bin/report",
