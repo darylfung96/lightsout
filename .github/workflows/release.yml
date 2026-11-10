@@ -64,6 +64,13 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: build
+        # A released binary carries its panic locations, which include the
+        # builder's home and checkout path. Remap both so the asset names no
+        # machine, the same way it names no user.
+        env:
+          RUSTFLAGS: >-
+            --remap-path-prefix=$HOME=/home/builder
+            --remap-path-prefix=${{ github.workspace }}=/lightsout
         run: cargo build --locked --release --target ${{ matrix.target }}
       - name: sign macOS binary
         if: runner.os == 'macOS' && env.MACOS_CERT_P12 != ''

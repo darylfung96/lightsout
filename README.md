@@ -49,7 +49,7 @@ in [docs/install.md](docs/install.md). The repository itself is a workspace, so
 the development commands below still work from this checkout.
 
 A job does not have to live in a workspace. `lightsout job add backup --command
-'rsync -a ~/work /Volumes/backup/work'` writes the job under
+'rsync -a ~/work /mnt/backup/work'` writes the job under
 `~/.config/lightsout`, and `lightsout run backup` works from any directory;
 [docs/universal.md](docs/universal.md) covers the registry, `--job-dir`,
 `--workspace` and the `schedule` printer.

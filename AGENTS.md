@@ -51,7 +51,7 @@ store; `U_PI_MEMORY` points a checkout at a different one. Owner pages:
   `memory-pass-check.py` instead. A failed pass is a blocked job, not a warning.
 - Durability is judgment: balances, build IDs and take numbers belong in a
   progress file, not in memory.
-- Search: `~/agent-memory/qmd-mem.sh search "<terms>" -c mac-automation` (needs file
+- Search: `~/agent-memory/qmd-mem.sh search "<terms>" -c <collection>` (needs file
   access outside the workspace sandbox, so run it unsandboxed).
 
 <!-- wiki: decisions=05-standing-decisions.md active=10-active.md -->

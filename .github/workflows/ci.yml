@@ -48,7 +48,7 @@ jobs:
         run: cargo fmt --all -- --check
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings
-      - name: workspace lifecycle tests
-        run: cargo test --locked --bin lightsout --test workspace_cli --test check_manifest
+      - name: cargo test (whole Rust suite)
+        run: cargo test --locked
       - name: installer test
         run: sh tests/install.sh
