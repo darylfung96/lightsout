@@ -857,6 +857,31 @@ fn a_deliverable_outside_every_scope_is_refused_before_the_runner_is_called() {
 }
 
 #[test]
+fn the_scope_gap_is_reported_before_the_heal_cap() {
+    let s = Sandbox::new("rf-gap-before-cap");
+    block_ready(&s);
+    s.write("triage.conf", "ready * agent:apply\n");
+    s.write(
+        "jobs/ready/state/expect",
+        "06:00\n/Users/me/library/books/*/out/episode.mp4\n",
+    );
+    s.write("jobs/ready/repair.allow", "out/\n");
+    let out = s.run_env(&["heal", "ready"], &[("MAX_HEALS", "0")]);
+
+    assert_eq!(code(&out), 2, "the gap refuses: {}", combined(&out));
+    assert!(
+        combined(&out).contains("cannot reach this job's deliverable"),
+        "the conflict wins over the cap: {}",
+        combined(&out)
+    );
+    assert!(
+        !combined(&out).contains("heal cap reached"),
+        "a spend cap must not hide a scope that can never work: {}",
+        combined(&out)
+    );
+}
+
+#[test]
 fn an_unguarded_exit_one_writes_a_crash_block() {
     let s = Sandbox::new("rf-crash-block");
     s.mkdir("jobs/ready/state");

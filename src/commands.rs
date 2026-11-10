@@ -1048,6 +1048,31 @@ fn agent_attempt(
     lock: &heal::Lock,
     apply: bool,
 ) -> i32 {
+    // A scope that cannot reach the deliverable refuses every proposal, and the
+    // check costs nothing, so it runs first: a spend cap or a missing runner
+    // must not be the message a person reads while the real answer is "this
+    // job allows writes nowhere that matter".
+    if let Some(gap) = heal::scope_gap(&paths.dir) {
+        let before = triage::failure_key(blocked);
+        if let Ok(attempt) = heal::begin_attempt(paths) {
+            record_heal(
+                paths,
+                &attempt,
+                action,
+                &before,
+                &before,
+                "invalid:scope",
+                2,
+            );
+        }
+        println!(
+            "heal: repair.allow cannot reach this job's deliverable: {}",
+            gap.deliverable
+        );
+        println!("heal: add a scope for it, e.g.  {}", gap.scope);
+        println!("heal: docs/auto-repair.md explains both scope forms");
+        return 2;
+    }
     let profile = match agent::resolve(repo, &paths.name, true) {
         Ok(profile) => profile,
         Err(error) => {
@@ -1090,26 +1115,6 @@ fn agent_attempt(
             2,
         );
         eprintln!("heal: {error}");
-        return 2;
-    }
-    // A job whose deliverable is outside every scope can only be answered
-    // "unfixable", so say it here instead of paying for the answer.
-    if let Some(gap) = heal::scope_gap(&paths.dir) {
-        record_heal(
-            paths,
-            &attempt,
-            action,
-            &before,
-            &before,
-            "invalid:scope",
-            2,
-        );
-        println!(
-            "heal: repair.allow cannot reach this job's deliverable: {}",
-            gap.deliverable
-        );
-        println!("heal: add a scope for it, e.g.  {}", gap.scope);
-        println!("heal: docs/auto-repair.md explains both scope forms");
         return 2;
     }
     attempt.agent = Some(agent_label.clone());
