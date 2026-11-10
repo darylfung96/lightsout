@@ -32,6 +32,10 @@ pub const USAGE: &str = "usage: lightsout [--workspace DIR] <verb> [name]
   report [--html PATH] [--open]
                        the dashboard page (same data as status); --open shows
                        the page in the browser after writing it
+  serve [--port N] [--open]
+                       the same page on http://127.0.0.1:7080 with buttons:
+                       Fix & continue (run --auto-repair), Unblock, Run and the
+                       job log, so a block can be cleared without a shell
   check [name]         alarm when an expected run never happened: notifies once
                        per job per day and exits 2 if a missed run is blocked
   plan <name>          what would run now; touches nothing

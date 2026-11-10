@@ -30,6 +30,8 @@ This repository builds them once.
   or launchd plist. `docs/universal.md`
 - **Visibility** — `bin/report` renders a dashboard from the state files: what
   needs a person, the run trend, due times, spend and a per-job detail panel.
+  `lightsout serve` puts the same page on `127.0.0.1:7080` with buttons: each
+  block shows its reason and offers Fix & continue, Unblock, Run and Log.
 
 ## Install
 
@@ -61,7 +63,14 @@ bin/job status --all               # one table, red rows first
 bin/job status --all --json        # same data for a page or a reminder
 bin/job run noop                   # run the fixture job
 bin/report --html out/status.html --open  # static page, no server
+lightsout serve --open                    # same page, with action buttons
 ```
+
+A button is not a second implementation: **Fix & continue** runs
+`lightsout run <name> --auto-repair`, **Run** runs `lightsout run <name>`,
+**Unblock** runs `lightsout unblock <name>`, and the page shows the child's
+output as it arrives. The listener is loopback only, and a POST needs the
+`X-Lightsout: 1` header, so a page on another origin cannot start a run.
 
 ## Product and workspace
 

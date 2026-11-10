@@ -297,6 +297,64 @@ fn jobs(repo: &Path) -> Vec<JobState> {
         .collect()
 }
 
+#[cfg(test)]
+impl JobState {
+    /// Every field at its empty value, for a test that only cares about one of
+    /// them. The page renders a record it did not build.
+    pub fn blank() -> Self {
+        JobState {
+            name: String::new(),
+            has_job: false,
+            has_spec: false,
+            state: "never run".into(),
+            detail: String::new(),
+            class: None,
+            source: None,
+            since: None,
+            stage: String::new(),
+            attempts_today: 0,
+            attempts_total: 0,
+            heal_attempts_today: 0,
+            last_heal: None,
+            spend_today: 0,
+            spend_total: 0,
+            last_exit: None,
+            last_run: None,
+            last_run_epoch: None,
+            last_work_epoch: None,
+            last_duration: None,
+            last_work_duration: None,
+            runs: Vec::new(),
+            out_files: 0,
+            expect: None,
+            expect_minutes: None,
+            overdue_minutes: None,
+            stale: false,
+            held: false,
+            summary: String::new(),
+            cadence: None,
+            stages_total: 0,
+            agent: None,
+            agent_configured: false,
+            agent_error: None,
+            deliverable: None,
+            deliverable_ok: None,
+            memory: None,
+            heal_last: None,
+            registered: false,
+            job_dir: String::new(),
+        }
+    }
+}
+
+/// The rows `status` prints, sorted the way both the table and the served page
+/// show them. `serve` reuses this so a click never reorders the page.
+pub fn snapshot(repo: &Path) -> Vec<JobState> {
+    let mut data = jobs(repo);
+    data.sort_by(|a, b| (order(&a.state), a.name.clone()).cmp(&(order(&b.state), b.name.clone())));
+    data
+}
+
 fn order(state: &str) -> u8 {
     match state {
         "blocked" => 0,
@@ -603,7 +661,10 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
 
 /// `--open` is a convenience, not a gate: the page is already on disk, so a
 /// missing `open`/`xdg-open` warns and still exits 0.
-fn open_page(path: &Path) {
+/// Hand a written page or a URL to the platform's opener. `report --open` and
+/// `serve --open` share it so the program name and the failure message are
+/// written once.
+pub(crate) fn open_page(path: &Path) {
     let program = if cfg!(target_os = "macos") {
         "open"
     } else {
@@ -631,11 +692,10 @@ pub fn run(argv: &[String]) -> i32 {
             return 64;
         }
     }
-    let mut data: Vec<JobState> = jobs(&repo)
+    let data: Vec<JobState> = snapshot(&repo)
         .into_iter()
         .filter(|rec| args.name.as_deref().is_none_or(|name| name == rec.name))
         .collect();
-    data.sort_by(|a, b| (order(&a.state), a.name.clone()).cmp(&(order(&b.state), b.name.clone())));
 
     if args.json {
         let values: Vec<Value> = data.iter().map(to_json).collect();

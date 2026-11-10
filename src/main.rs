@@ -11,6 +11,7 @@ mod registry;
 mod repo;
 mod report;
 mod schedule;
+mod serve;
 mod spec;
 mod state;
 mod status;
@@ -124,6 +125,7 @@ fn run(argv: &[String]) -> i32 {
         "status" | "report" => with_workspace(|_| status::run(rest)),
         "check" => with_workspace(|root| commands::check(root, rest.first().map(String::as_str))),
         "schedule" => with_workspace(|root| schedule::run(root, rest)),
+        "serve" => with_workspace(|root| serve::run(root, rest)),
         "plan" => match rest.first() {
             Some(name) => with_workspace(|root| commands::plan(root, name)),
             None => {

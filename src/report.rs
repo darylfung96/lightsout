@@ -12,6 +12,19 @@ use crate::repo;
 use crate::state;
 use crate::status::JobState;
 
+/// One action the served page can show: `fix`, `run` or `unblock`, either in
+/// flight or finished. `output` is the child's tail, already escaped by the
+/// caller when it is dropped into the page.
+#[derive(Clone, Debug)]
+pub struct LiveAction {
+    pub job: String,
+    pub verb: String,
+    pub running: bool,
+    pub rc: Option<i32>,
+    pub seconds: i64,
+    pub output: String,
+}
+
 fn esc(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for c in value.chars() {
@@ -333,7 +346,7 @@ fn details(rec: &JobState) -> String {
     )
 }
 
-fn jobs_table(data: &[JobState]) -> String {
+fn jobs_table(data: &[JobState], _served: bool) -> String {
     if data.is_empty() {
         return "<tr><td colspan=\"10\" class=\"empty\">no jobs yet — \
                 <code>lightsout init</code> writes the noop fixture</td></tr>"
@@ -456,34 +469,54 @@ fn command_for(rec: &JobState) -> (&'static str, String) {
     }
 }
 
-fn attention_item(rec: &JobState) -> Option<String> {
+fn attention_item(rec: &JobState, served: bool) -> Option<String> {
     match rec.state.as_str() {
         "blocked" => {
             let (hint, command) = command_for(rec);
+            let tail = if served {
+                buttons(rec)
+            } else {
+                format!(
+                    "<div class=\"fix\"><code>{}</code><span>{}</span></div>",
+                    esc(&command),
+                    hint
+                )
+            };
             Some(format!(
                 "<li><div class=\"attn-top\"><span class=\"pill p-blocked\">blocked</span>\
                  <span class=\"name\">{}</span>{class}\
                  <span class=\"age\">since {}</span></div>\
-                 <p class=\"reason\">{}</p>\
-                 <div class=\"fix\"><code>{command}</code><span>{hint}</span></div></li>",
+                 <p class=\"reason\">{}</p>{tail}</li>",
                 esc(&rec.name),
                 since_text(rec),
                 esc(&rec.detail),
                 class = class_chip(rec),
-                command = esc(&command),
-                hint = hint,
+                tail = tail,
             ))
         }
-        "failed" => Some(format!(
-            "<li><div class=\"attn-top\"><span class=\"pill p-failed\">failed</span>\
-             <span class=\"name\">{}</span><span class=\"age\">exit {} · {}</span></div>\
-             <p class=\"reason\">the last run failed and wrote no done marker</p>\
-             <div class=\"fix\"><code>lightsout run {}</code><span>take one attempt, then read the log</span></div></li>",
-            esc(&rec.name),
-            rec.last_exit.unwrap_or(1),
-            rec.last_run.as_deref().map(|iso| esc(&day_hhmm(iso, &clock::today()))).unwrap_or_else(|| "unknown".into()),
-            esc(&rec.name),
-        )),
+        "failed" => {
+            let tail = if served {
+                buttons(rec)
+            } else {
+                format!(
+                    "<div class=\"fix\"><code>lightsout run {}</code>\
+                     <span>take one attempt, then read the log</span></div>",
+                    esc(&rec.name)
+                )
+            };
+            Some(format!(
+                "<li><div class=\"attn-top\"><span class=\"pill p-failed\">failed</span>\
+                 <span class=\"name\">{}</span><span class=\"age\">exit {} · {}</span></div>\
+                 <p class=\"reason\">the last run failed and wrote no done marker</p>{tail}</li>",
+                esc(&rec.name),
+                rec.last_exit.unwrap_or(1),
+                rec.last_run
+                    .as_deref()
+                    .map(|iso| esc(&day_hhmm(iso, &clock::today())))
+                    .unwrap_or_else(|| "unknown".into()),
+                tail = tail,
+            ))
+        }
         _ if rec.stale => {
             let reason = match (&rec.deliverable, rec.deliverable_ok) {
                 (Some(pattern), Some(false)) => {
@@ -491,24 +524,35 @@ fn attention_item(rec: &JobState) -> Option<String> {
                 }
                 _ => "no run by its expect time".to_string(),
             };
+            let tail = if served {
+                buttons(rec)
+            } else {
+                format!(
+                    "<div class=\"fix\"><code>lightsout check {}</code>\
+                     <span>alarm once, or run it now</span></div>",
+                    esc(&rec.name)
+                )
+            };
             Some(format!(
                 "<li><div class=\"attn-top\"><span class=\"pill p-late\">overdue</span>\
                  <span class=\"name\">{}</span>\
                  <span class=\"age\">late {}</span></div>\
-                 <p class=\"reason\">{reason} (expect {})</p>\
-                 <div class=\"fix\"><code>lightsout check {}</code><span>alarm once, or run it now</span></div></li>",
+                 <p class=\"reason\">{reason} (expect {})</p>{tail}</li>",
                 esc(&rec.name),
                 elapsed(rec.overdue_minutes.unwrap_or(0).max(0) * 60),
                 esc(rec.expect.as_deref().unwrap_or("—")),
-                esc(&rec.name),
+                tail = tail,
             ))
         }
         _ => None,
     }
 }
 
-fn attention(data: &[JobState]) -> String {
-    let items: Vec<String> = data.iter().filter_map(attention_item).collect();
+fn attention(data: &[JobState], served: bool) -> String {
+    let items: Vec<String> = data
+        .iter()
+        .filter_map(|rec| attention_item(rec, served))
+        .collect();
     if items.is_empty() {
         return "<section class=\"panel allclear\"><span class=\"dot-ok\"></span>\
                 <span><b>All quiet</b> — nothing blocked, failed or overdue.</span></section>"
@@ -522,6 +566,92 @@ fn attention(data: &[JobState]) -> String {
          <ul class=\"attn\">{}</ul></section>",
         items.len(),
         items.join("")
+    )
+}
+
+/// The action row a served page puts under a job that needs a person. The
+/// verbs are the CLI verbs; the page never invents a fourth.
+fn buttons(rec: &JobState) -> String {
+    let blocked = rec.state == "blocked";
+    let failed = rec.state == "failed";
+    let mut out = format!("<div class=\"act\" data-job=\"{}\">", esc(&rec.name));
+    if (blocked || failed) && rec.has_job {
+        out.push_str(
+            "<button type=\"button\" class=\"btn primary\" data-verb=\"fix\">Fix &amp; continue</button>",
+        );
+    }
+    if blocked && rec.has_job {
+        out.push_str(
+            "<button type=\"button\" class=\"btn\" data-verb=\"unblock\">Unblock</button>",
+        );
+    }
+    if rec.has_job && rec.state != "running" {
+        out.push_str("<button type=\"button\" class=\"btn\" data-verb=\"run\">Run</button>");
+    }
+    out.push_str(
+        "<button type=\"button\" class=\"btn ghost\" data-verb=\"log\">Log</button>\
+         <span class=\"note\" role=\"status\"></span>\
+         <pre class=\"out\" hidden></pre></div>",
+    );
+    out
+}
+
+/// What a click is doing right now, above the attention list, so a reload or a
+/// second tab still sees the run in flight and its tail.
+fn action_banner(actions: &[LiveAction]) -> String {
+    let running: Vec<&LiveAction> = actions.iter().filter(|action| action.running).collect();
+    // A finished click keeps its output for half an hour, because the reason a
+    // person pressed Fix is the thing they want to read when it returns.
+    let recent: Vec<&LiveAction> = actions
+        .iter()
+        .rev()
+        .filter(|action| !action.running && action.seconds < 1800)
+        .take(6)
+        .collect();
+    if running.is_empty() && recent.is_empty() {
+        return String::new();
+    }
+    let mut rows = String::new();
+    for action in &running {
+        rows.push_str(&format!(
+            "<div class=\"row\"><span class=\"pill p-running\">running</span>\
+             <span class=\"name\">{}</span><span class=\"muted\">{} · {}</span></div>\
+             <pre class=\"out\">{}</pre>",
+            esc(&action.job),
+            esc(&action.verb),
+            elapsed(action.seconds),
+            esc(&action.output),
+        ));
+    }
+    for action in recent {
+        let verdict = match action.rc {
+            Some(0) => "<span class=\"ok\">exit 0</span>".to_string(),
+            Some(rc) => format!("<span class=\"late\">exit {rc}</span>"),
+            None => String::new(),
+        };
+        let body = if action.output.trim().is_empty() {
+            "<span class=\"muted\">no output</span>".to_string()
+        } else {
+            format!("<pre class=\"out\">{}</pre>", esc(&action.output))
+        };
+        rows.push_str(&format!(
+            "<details class=\"recent\"><summary><span class=\"name\">{}</span>\
+             <span class=\"muted\">{} · {} ago</span> {}</summary>{}</details>",
+            esc(&action.job),
+            esc(&action.verb),
+            ago(action.seconds),
+            verdict,
+            body,
+        ));
+    }
+    let head = if running.is_empty() {
+        "<h2>Last action</h2><span class=\"hint\">what the button printed</span>".to_string()
+    } else {
+        "<h2>Working now</h2><span class=\"hint\">the page reloads when it finishes</span>"
+            .to_string()
+    };
+    format!(
+        "<section class=\"panel livebar\"><div class=\"panel-head\">{head}</div>{rows}</section>"
     )
 }
 
@@ -543,10 +673,13 @@ fn needs_person(rec: &JobState) -> bool {
     matches!(rec.state.as_str(), "blocked" | "failed") || overdue_only(rec)
 }
 
-fn kpis(data: &[JobState]) -> String {
+fn kpis(data: &[JobState], actions: &[LiveAction]) -> String {
     let blocked = data.iter().filter(|rec| rec.state == "blocked").count();
     let failed = data.iter().filter(|rec| rec.state == "failed").count();
-    let running = data.iter().filter(|rec| rec.state == "running").count();
+    // A click is a run, even in the seconds before the job takes its lock, so
+    // the count a person reads after pressing Fix cannot say "nothing in flight".
+    let inflight = actions.iter().filter(|action| action.running).count();
+    let running = data.iter().filter(|rec| rec.state == "running").count() + inflight;
     let done = data.iter().filter(|rec| rec.state == "done today").count();
     let late = data.iter().filter(|rec| overdue_only(rec)).count();
     let never = data.iter().filter(|rec| rec.state == "never run").count();
@@ -568,7 +701,9 @@ fn kpis(data: &[JobState]) -> String {
     out.push_str(&kpi(
         "running",
         &running.to_string(),
-        if running > 0 {
+        if inflight > 0 {
+            "started from this page"
+        } else if running > 0 {
             "with a live lock"
         } else {
             "nothing in flight"
@@ -613,6 +748,19 @@ fn kpis(data: &[JobState]) -> String {
 const MARK: &str = r##"<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2.8a6.2 6.2 0 0 0-3.7 11.18V17h7.4v-3.02A6.2 6.2 0 0 0 12 2.8Z" stroke="#f0c060" stroke-width="1.5" stroke-linejoin="round"/><path d="M9.6 20h4.8" stroke="#f0c060" stroke-width="1.5" stroke-linecap="round"/></svg>"##;
 
 pub fn render(data: &[JobState], root: &Path) -> String {
+    render_page(data, root, None)
+}
+
+/// The served page: the same document plus the action buttons and the script
+/// that posts them. `origin` names the listener in the footer, so a printed or
+/// screenshotted page says where it came from.
+pub fn render_live(data: &[JobState], root: &Path, actions: &[LiveAction], origin: &str) -> String {
+    render_page(data, root, Some((actions, origin)))
+}
+
+fn render_page(data: &[JobState], root: &Path, live: Option<(&[LiveAction], &str)>) -> String {
+    let served = live.is_some();
+    let actions: &[LiveAction] = live.map(|(actions, _)| actions).unwrap_or(&[]);
     let generated = clock::format_epoch(clock::now_epoch(), "%Y-%m-%d %H:%M");
     let needs = data.iter().filter(|rec| needs_person(rec)).count();
     let name = root
@@ -642,7 +790,7 @@ pub fn render(data: &[JobState], root: &Path) -> String {
          <title>{title}</title>\n\
          <link rel=\"icon\" href=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2319182e'/%3E%3Cpath d='M16 7a7 7 0 0 0-4.2 12.6V23h8.4v-3.4A7 7 0 0 0 16 7Z' fill='none' stroke='%23f0c060' stroke-width='1.8'/%3E%3Cpath d='M13.4 26h5.2' stroke='%23f0c060' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E\">\n\
          <script>try{{var t=localStorage.getItem('lightsout-theme');if(t&&t!=='auto')document.documentElement.dataset.theme=t}}catch(e){{}}</script>\n\
-         <style>{css}</style>\n</head>\n<body>\n<div class=\"wrap\">\n\
+         <style>{css}</style>\n</head>\n<body{body_attr}>\n<div class=\"wrap\">\n\
          <header>\n\
            <div class=\"brand\"><span class=\"mark\">{mark}</span>\
              <div><h1>LightsOut</h1>\
@@ -656,6 +804,7 @@ pub fn render(data: &[JobState], root: &Path) -> String {
            </div>\n\
          </header>\n\
          <section class=\"kpis\">{kpis}</section>\n\
+         {banner}\
          {attention}\n\
          <section class=\"panel jobs\">\n\
            <div class=\"toolbar\">\
@@ -685,8 +834,8 @@ pub fn render(data: &[JobState], root: &Path) -> String {
              </tr></thead>\n\
              <tbody>\n{rows}\n</tbody>\n</table></div>\n\
          </section>\n\
-         <footer><span>LightsOut v{version} · generated {generated} · static page, no server</span>\
-         <span>refresh with <code>bin/report --html out/status.html --open</code></span></footer>\n\
+         <footer><span>LightsOut v{version} · generated {generated} · {footer_left}</span>\
+         <span>{footer_right}</span></footer>\n\
          </div>\n<script>{script}</script>\n</body>\n</html>\n",
         version = repo::VERSION,
         title = esc(&title),
@@ -696,11 +845,31 @@ pub fn render(data: &[JobState], root: &Path) -> String {
         path = esc(&root.display().to_string()),
         name = esc(&name),
         generated = generated,
-        kpis = kpis(data),
-        attention = attention(data),
-        rows = jobs_table(data),
-        css = CSS,
-        script = SCRIPT,
+        kpis = kpis(data, actions),
+        body_attr = if served { " data-live=\"1\"" } else { "" },
+        banner = action_banner(actions),
+        attention = attention(data, served),
+        rows = jobs_table(data, served),
+        css = if served {
+            format!("{CSS}{LIVE_CSS}")
+        } else {
+            CSS.to_string()
+        },
+        script = if served {
+            format!("{SCRIPT}{LIVE_SCRIPT}")
+        } else {
+            SCRIPT.to_string()
+        },
+        footer_left = if served {
+            format!("live · served from {}", esc(live.map(|(_, origin)| origin).unwrap_or("")))
+        } else {
+            "static page, no server".to_string()
+        },
+        footer_right = if served {
+            "actions run the same commands as the CLI".to_string()
+        } else {
+            "refresh with <code>bin/report --html out/status.html --open</code>".to_string()
+        },
     )
 }
 
@@ -974,6 +1143,111 @@ const SCRIPT: &str = r##"
 })();
 "##;
 
+const LIVE_CSS: &str = r##"
+.act{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px}
+.btn{font:inherit;font-size:11.5px;font-weight:600;padding:4px 11px;border-radius:8px;
+  border:1px solid var(--line-2);background:var(--panel);color:var(--ink);cursor:pointer}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{filter:brightness(1.08);color:#fff}
+.btn.ghost{background:transparent;color:var(--muted)}
+.btn:disabled{opacity:.5;cursor:progress}
+.act .note{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.act .note.bad{color:var(--red)}
+pre.out{grid-column:1/-1;margin:2px 0 0;max-height:220px;overflow:auto;
+  background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:9px 11px;
+  font:11.5px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)}
+pre.out[hidden]{display:none}
+.livebar{padding:0 0 12px}
+.livebar .row{display:flex;align-items:center;gap:8px;padding:10px 18px 4px;font-size:12.5px}
+.livebar .name{font-weight:650}
+.livebar pre.out{margin:0 18px}
+.recent{padding:8px 18px 10px;border-top:1px solid var(--line)}
+.recent summary{display:flex;align-items:center;gap:7px;cursor:pointer;list-style:none;font-size:12.5px}
+.recent summary::-webkit-details-marker{display:none}
+.recent summary::before{content:"+";font-family:var(--mono);color:var(--muted)}
+.recent[open] summary::before{content:"–"}
+.recent pre.out{margin:6px 0 0}
+"##;
+
+/// The served page's half of the script: post the verb, poll the action list,
+/// reload once the child exits. The rest of the page is unchanged, so a static
+/// file and a served page read the same.
+const LIVE_SCRIPT: &str = r##"
+(function(){
+  if(!document.body.hasAttribute('data-live')){ return; }
+  function note(box,text,bad){
+    var el=box.querySelector('.note');
+    if(!el){ return; }
+    el.textContent=text||'';
+    el.className='note'+(bad?' bad':'');
+  }
+  function out(box,text){
+    var pre=box.querySelector('pre.out');
+    if(!pre){ return; }
+    pre.hidden=!text;
+    pre.textContent=text||'';
+  }
+  function enable(box,on){
+    box.querySelectorAll('button').forEach(function(btn){ btn.disabled=!on; });
+  }
+  function showLog(box,job){
+    note(box,'loading log…');
+    fetch('/api/jobs/'+encodeURIComponent(job)+'/log?lines=40',{headers:{'X-Lightsout':'1'}})
+      .then(function(r){ if(!r.ok){ throw new Error('HTTP '+r.status); } return r.text(); })
+      .then(function(text){ out(box,text); note(box,'last 40 lines'); })
+      .catch(function(error){ note(box,'error: '+error.message,true); });
+  }
+  function poll(box,job){
+    var since=Date.now();
+    var timer=setInterval(function(){
+      fetch('/api/actions').then(function(r){ return r.json(); }).then(function(data){
+        var mine=(data.actions||[]).filter(function(action){ return action.job===job; });
+        var running=mine.filter(function(action){ return action.running; });
+        if(running.length){
+          var action=running[0];
+          note(box,action.verb+' · '+Math.round((Date.now()-since)/1000)+'s');
+          out(box,action.output||'');
+          return;
+        }
+        clearInterval(timer);
+        var last=mine[mine.length-1];
+        if(last){
+          note(box,(last.rc===0?'done':'exit '+last.rc)+' · reloading');
+        }
+        setTimeout(function(){ location.reload(); },1200);
+      }).catch(function(){});
+    },2000);
+  }
+  document.querySelectorAll('.act').forEach(function(box){
+    var job=box.dataset.job||'';
+    box.querySelectorAll('button[data-verb]').forEach(function(btn){
+      btn.addEventListener('click',function(){
+        var verb=btn.dataset.verb;
+        if(verb==='log'){ return showLog(box,job); }
+        enable(box,false);
+        note(box,verb==='fix'?'starting the fix…':'starting…');
+        fetch('/api/jobs/'+encodeURIComponent(job)+'/'+verb,{
+          method:'POST',
+          headers:{'X-Lightsout':'1'}
+        }).then(function(r){
+          return r.text().then(function(text){
+            if(!r.ok){ throw new Error((text||('HTTP '+r.status)).trim()); }
+            return text;
+          });
+        }).then(function(){
+          poll(box,job);
+        }).catch(function(error){
+          note(box,'error: '+error.message,true);
+          out(box,'');
+          enable(box,true);
+        });
+      });
+    });
+  });
+})();
+"##;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1011,6 +1285,64 @@ mod tests {
     fn dynamic_text_is_escaped() {
         assert_eq!(esc("<script>x</script>"), "&lt;script&gt;x&lt;/script&gt;");
         assert_eq!(esc("a & b \"c\""), "a &amp; b &quot;c&quot;");
+    }
+
+    fn action(
+        verb: &str,
+        running: bool,
+        rc: Option<i32>,
+        seconds: i64,
+        output: &str,
+    ) -> LiveAction {
+        LiveAction {
+            job: "noop".into(),
+            verb: verb.into(),
+            running,
+            rc,
+            seconds,
+            output: output.into(),
+        }
+    }
+
+    #[test]
+    fn a_running_action_shows_its_tail() {
+        let banner = action_banner(&[action("fix", true, None, 12, "heal: agent dsh\n")]);
+        assert!(banner.contains("Working now"));
+        assert!(banner.contains("heal: agent dsh"));
+        assert!(banner.contains("12s"));
+    }
+
+    #[test]
+    fn a_finished_action_keeps_its_output() {
+        let banner = action_banner(&[action("fix", false, Some(2), 60, "low disk <b>")]);
+        assert!(banner.contains("Last action"));
+        assert!(banner.contains("exit 2"));
+        assert!(banner.contains("low disk &lt;b&gt;"), "{banner}");
+    }
+
+    #[test]
+    fn a_finished_action_older_than_half_an_hour_is_not_shown() {
+        assert_eq!(
+            action_banner(&[action("run", false, Some(0), 7200, "")]),
+            ""
+        );
+    }
+
+    #[test]
+    fn the_live_script_posts_the_cli_verbs() {
+        assert!(LIVE_SCRIPT.contains("/api/jobs/"));
+        assert!(LIVE_SCRIPT.contains("'X-Lightsout':'1'"));
+        assert!(LIVE_SCRIPT.contains("location.reload"));
+        let blocked = buttons(&crate::status::JobState {
+            name: "noop".into(),
+            state: "blocked".into(),
+            has_job: true,
+            ..crate::status::JobState::blank()
+        });
+        assert!(blocked.contains("data-verb=\"fix\""));
+        assert!(blocked.contains("data-verb=\"unblock\""));
+        assert!(blocked.contains("data-verb=\"run\""));
+        assert!(blocked.contains("data-verb=\"log\""));
     }
 
     #[test]

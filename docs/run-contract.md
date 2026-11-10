@@ -221,6 +221,17 @@ exactly the silence this file exists to break (2026-10-24, when a build held for
 the wrong reason and the alarm reported nothing because the run itself
 succeeded).
 
+`lightsout serve` serves the dashboard from `127.0.0.1` (port 7080 by default)
+and adds the actions a person would otherwise type. Each blocked, failed or
+overdue job shows its reason with four buttons: **Fix & continue** runs
+`run --auto-repair` — `heal` instead when the block predates today, because
+`run` refuses a stale block — and **Unblock**, **Run** and **Log** run those
+verbs. A click spawns the verb as a child of the server, so the button and the
+CLI are one code path; the page polls the action list and reloads when the child
+exits. The listener is loopback only, a `Host` that is not loopback is refused,
+and a POST without `X-Lightsout: 1` is refused, so a page on another origin
+cannot start a run. The static file keeps no buttons, because a file cannot act.
+
 A hold is not a miss. Another run holding the `lock` is doing the work only when
 the pid in `state/lock/pid` is still running; a lock directory left by SIGKILL
 or a reboot is not evidence of work, so `check` and `status` ignore it and the
