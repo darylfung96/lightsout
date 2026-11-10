@@ -1715,6 +1715,16 @@ fn t23_video_job() {
     let _ = fs::remove_file(video.join("calls.log"));
     fs::write(video.join("outbox/041-master.mp4"), "").unwrap();
     let out = run_env(&s, &[]);
+    if code(&out) != 0 {
+        eprintln!(
+            "diagnostic: blocked={:?}",
+            s.read("jobs/everyday-laws/state/blocked")
+        );
+        eprintln!(
+            "diagnostic: log={}",
+            s.read(&format!("jobs/everyday-laws/logs/{}.log", s.today()))
+        );
+    }
     c.check("a same-day master holds", 0, code(&out));
     c.check(
         "the hold spends no attempt",
