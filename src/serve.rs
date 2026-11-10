@@ -156,6 +156,16 @@ fn accept_loop(listener: TcpListener, server: Arc<Server>) -> i32 {
                 let server = Arc::clone(&server);
                 thread::spawn(move || handle(stream, &server));
             }
+            // A client that resets between the SYN and the accept is one lost
+            // request, not a reason to stop serving everyone else.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                continue;
+            }
             Err(error) => {
                 eprintln!("serve: {error}");
                 return 1;

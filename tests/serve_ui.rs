@@ -14,6 +14,9 @@ use std::time::{Duration, Instant};
 struct Fixture {
     root: PathBuf,
     child: Child,
+    /// The server's own errors, kept so a failed test can say why the server
+    /// stopped instead of only that the socket failed.
+    stderr: Option<std::process::ChildStderr>,
     port: u16,
 }
 
@@ -21,6 +24,15 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if std::thread::panicking() {
+            if let Some(mut stderr) = self.stderr.take() {
+                let mut said = String::new();
+                let _ = stderr.read_to_string(&mut said);
+                if !said.trim().is_empty() {
+                    eprintln!("serve stderr:\n{said}");
+                }
+            }
+        }
         let _ = fs::remove_dir_all(&self.root);
     }
 }
@@ -37,9 +49,10 @@ fn fixture(tag: &str) -> Fixture {
         .args(["serve", "--port", "0"])
         .current_dir(&root)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("serve starts");
+    let stderr = child.stderr.take();
     let stdout = child.stdout.take().unwrap();
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
@@ -50,7 +63,12 @@ fn fixture(tag: &str) -> Fixture {
         .next()
         .and_then(|port| port.parse().ok())
         .unwrap_or_else(|| panic!("no port in {line:?}"));
-    Fixture { root, child, port }
+    Fixture {
+        root,
+        child,
+        stderr,
+        port,
+    }
 }
 
 fn job(root: &Path, name: &str) {
