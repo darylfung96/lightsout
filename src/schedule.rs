@@ -338,9 +338,19 @@ mod tests {
             );
         }
 
-        // A `#` is part of the value: the marker format has no inline comments.
+        // Quotes protect a `#`; outside them it starts a comment.
         std::fs::write(root.join(repo::MARKER), "launcher = \"/tmp/a#b\"\n").unwrap();
         assert_eq!(scheduled_binary(&root), PathBuf::from("/tmp/a#b"));
+
+        std::fs::write(
+            root.join(repo::MARKER),
+            "launcher = \"/tmp/a#b\" # the frozen wrapper\n",
+        )
+        .unwrap();
+        assert_eq!(scheduled_binary(&root), PathBuf::from("/tmp/a#b"));
+
+        std::fs::write(root.join(repo::MARKER), "launcher = /tmp/plain # why\n").unwrap();
+        assert_eq!(scheduled_binary(&root), PathBuf::from("/tmp/plain"));
 
         let _ = std::fs::remove_dir_all(&root);
     }

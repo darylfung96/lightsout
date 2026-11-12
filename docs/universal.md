@@ -101,10 +101,12 @@ launcher = "/Users/me/.local/libexec/lightsout-run.sh"
 ```
 
 The value can be absolute, `~/…`, or relative to the workspace, so
-`launcher = "bin/run.sh"` names `<workspace>/bin/run.sh`. The launcher is
-started with the arguments the binary would have received (`run <name>`, and
-`--auto-repair` when the trigger carries it), and the marker has no inline
-comments, so a `#` in the value stays there. This exists for hosts where the
+`launcher = "bin/run.sh"` names `<workspace>/bin/run.sh`, and cron or the
+plist hands it the same words they hand the binary: `run book-lessons`, plus
+`--auto-repair` when the trigger carries it. Quoting decides how a `#` reads:
+inside the quotes it is part of the path, outside them it starts a comment, so
+`launcher = "/Volumes/X9 Pro/run.sh" # the frozen wrapper` keeps the path and
+drops the note. This exists for hosts where the
 scheduler's own process must keep one identity: macOS attaches a disk
 permission to the exact file launchd starts, so an upgraded binary loses it and
 every scheduled run dies before writing a line. A wrapper of three lines has

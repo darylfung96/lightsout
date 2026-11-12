@@ -23,6 +23,42 @@ fn looks_like_repo(path: &Path) -> bool {
     path.join("jobs").is_dir() && path.join("lib").is_dir()
 }
 
+/// One `key = value` from the marker. A quoted value keeps everything inside its
+/// quotes, a `#` starts a comment only outside them, and a blank or commented line
+/// is not a value. Every reader of the marker goes through this, so `doctor` and
+/// `schedule` cannot disagree about what one line says.
+pub fn marker_value(body: &str, key: &str) -> Option<String> {
+    for line in body.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        if name.trim() != key {
+            continue;
+        }
+        let value = value.trim();
+        let value = match value.chars().next() {
+            Some(quote @ ('"' | '\'')) => {
+                let rest = &value[1..];
+                match rest.find(quote) {
+                    Some(end) => &rest[..end],
+                    None => rest,
+                }
+            }
+            _ => value.split('#').next().unwrap_or("").trim(),
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            return None;
+        }
+        return Some(value.to_string());
+    }
+    None
+}
+
 /// `launcher` in the marker names the program a scheduler should start instead of
 /// this binary. A workspace sets it when the scheduler's own process must keep one
 /// code identity across upgrades: macOS attaches a disk permission to the exact
@@ -32,33 +68,15 @@ fn looks_like_repo(path: &Path) -> bool {
 /// binary would. No value means "start the binary", which is the default.
 pub fn launcher(root: &Path) -> Option<PathBuf> {
     let body = fs::read_to_string(root.join(MARKER)).ok()?;
-    for line in body.lines() {
-        let line = line.trim();
-        if line.starts_with('#') {
-            continue;
+    let value = marker_value(&body, "launcher")?;
+    Some(expand_home(&value).unwrap_or_else(|| {
+        let path = PathBuf::from(&value);
+        if path.is_absolute() {
+            path
+        } else {
+            root.join(path)
         }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim() != "launcher" {
-            continue;
-        }
-        // The marker format has no inline comments, so a `#` here belongs to the
-        // value. Only the quotes around a value are syntax.
-        let value = value.trim().trim_matches(['"', '\'']);
-        if value.is_empty() {
-            return None;
-        }
-        return Some(expand_home(value).unwrap_or_else(|| {
-            let path = PathBuf::from(value);
-            if path.is_absolute() {
-                path
-            } else {
-                root.join(path)
-            }
-        }));
-    }
-    None
+    }))
 }
 
 /// `~/…` is common in a hand-written marker and no shell expands it for launchd.

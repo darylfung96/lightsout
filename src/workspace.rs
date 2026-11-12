@@ -744,23 +744,19 @@ fn finish(errors: usize, warnings: usize) -> i32 {
 }
 
 fn parse_marker(body: &str) -> Option<(u32, Option<String>)> {
-    let mut schema = None;
-    let mut manager = None;
-    for line in body.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let (key, value) = line.split_once('=')?;
-        let key = key.trim();
-        let value = value.trim().trim_matches('"');
-        match key {
-            "schema" => schema = value.parse::<u32>().ok(),
-            "manager" => manager = Some(value.to_string()),
-            _ => {}
-        }
+    // A line that is neither a comment nor `key = value` is a typo worth failing
+    // on; the value rules themselves live in `repo::marker_value`, shared with
+    // `schedule` so one line cannot mean two things.
+    let malformed = body
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .any(|line| !line.contains('='));
+    if malformed {
+        return None;
     }
-    schema.map(|schema| (schema, manager))
+    let schema = repo::marker_value(body, "schema")?.parse::<u32>().ok()?;
+    Some((schema, repo::marker_value(body, "manager")))
 }
 
 fn check_expect(root: &Path, job: &str, errors: &mut usize) {

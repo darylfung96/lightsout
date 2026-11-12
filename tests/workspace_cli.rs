@@ -287,3 +287,31 @@ fn doctor_names_a_launcher_that_is_gone() {
         text(&after)
     );
 }
+
+#[test]
+fn a_trailing_comment_does_not_hide_the_marker() {
+    let temp = Temp::new("comment");
+    let office = temp.join("office");
+    assert_eq!(
+        code(&run(temp.path(), &["init", office.to_str().unwrap()])),
+        0
+    );
+    let marker = office.join("lightsout.toml");
+    let body = fs::read_to_string(&marker)
+        .unwrap()
+        .replace("schema = 1", "schema = 1 # the workspace contract");
+    fs::write(&marker, body).unwrap();
+
+    let doctor = run(&office, &["doctor"]);
+    assert_eq!(
+        code(&doctor),
+        0,
+        "a comment after the value is not a parse error: {}",
+        text(&doctor)
+    );
+    assert!(
+        text(&doctor).contains("marker schema 1"),
+        "the schema still reads: {}",
+        text(&doctor)
+    );
+}
