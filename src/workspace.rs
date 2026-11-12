@@ -411,6 +411,23 @@ pub fn doctor(root: &Path) -> i32 {
         return finish(errors, warnings);
     }
 
+    // A launcher that is gone takes every scheduled run with it, silently, so it is
+    // the one marker value worth checking before a trigger is printed or installed.
+    if let Some(launcher) = repo::launcher(root) {
+        if launcher.is_file() {
+            ok(&format!("launcher {}", launcher.display()));
+        } else {
+            warning(
+                &mut warnings,
+                &format!(
+                    "the launcher named in {} is not a file: {}; a scheduled run would not start",
+                    repo::MARKER,
+                    launcher.display()
+                ),
+            );
+        }
+    }
+
     for rel in [
         "lib/guards.sh",
         "lib/locks.sh",

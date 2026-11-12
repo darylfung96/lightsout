@@ -100,14 +100,18 @@ line starts that program instead of the binary:
 launcher = "/Users/me/.local/libexec/lightsout-run.sh"
 ```
 
-The value can be relative to the workspace, so `launcher = "bin/run.sh"` names
-`<workspace>/bin/run.sh`. This exists for hosts where the scheduler's own
-process must keep one identity: macOS attaches a disk permission to the exact
-file launchd starts, so an upgraded binary loses it and every scheduled run
-dies before writing a line. A wrapper of three lines has the same bytes and the
-same permission after every upgrade of the binary; a launcher that is not a
-file is reported on stderr and still printed, so the installed plist shows what
-will actually run.
+The value can be absolute, `~/…`, or relative to the workspace, so
+`launcher = "bin/run.sh"` names `<workspace>/bin/run.sh`. The launcher is
+started with the arguments the binary would have received (`run <name>`, and
+`--auto-repair` when the trigger carries it), and the marker has no inline
+comments, so a `#` in the value stays there. This exists for hosts where the
+scheduler's own process must keep one identity: macOS attaches a disk
+permission to the exact file launchd starts, so an upgraded binary loses it and
+every scheduled run dies before writing a line. A wrapper of three lines has
+the same bytes and the same permission after every upgrade of the binary; a
+launcher that is not a file is reported on stderr and still printed, so the
+installed plist shows what will actually run. `doctor` reports the same file as
+a warning.
 
 ## Failure modes
 

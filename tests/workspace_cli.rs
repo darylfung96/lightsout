@@ -257,3 +257,33 @@ fn doctor_rejects_an_escaping_repair_allow() {
     assert_eq!(code(&doctor), 1, "{}", text(&doctor));
     assert!(text(&doctor).contains("repair.allow"), "{}", text(&doctor));
 }
+
+#[test]
+fn doctor_names_a_launcher_that_is_gone() {
+    let temp = Temp::new("launcher");
+    let office = temp.join("office");
+    assert_eq!(
+        code(&run(temp.path(), &["init", office.to_str().unwrap()])),
+        0
+    );
+    let marker = office.join("lightsout.toml");
+    let mut body = fs::read_to_string(&marker).unwrap();
+    body.push_str("launcher = \"bin/missing-run.sh\"\n");
+    fs::write(&marker, body).unwrap();
+
+    let doctor = run(&office, &["doctor"]);
+    let said = text(&doctor);
+    assert_eq!(code(&doctor), 0, "a missing launcher is a warning: {said}");
+    assert!(
+        said.contains("launcher") && said.contains("missing-run.sh"),
+        "doctor names the launcher: {said}"
+    );
+
+    fs::write(office.join("bin/missing-run.sh"), "#!/bin/sh\n").unwrap();
+    let after = run(&office, &["doctor"]);
+    assert!(
+        text(&after).contains("ok   launcher"),
+        "a launcher that exists is reported: {}",
+        text(&after)
+    );
+}

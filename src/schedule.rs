@@ -82,7 +82,7 @@ pub fn run(root: &Path, argv: &[String]) -> i32 {
             }
         },
     };
-    let binary = scheduled_binary(root);
+    let binary = scheduled_binary(&paths.repo);
     if launchd {
         let path_env = scheduled_path();
         println!(
@@ -328,6 +328,19 @@ mod tests {
             root.join("run.sh"),
             "a relative path belongs to the workspace"
         );
+
+        // A hand-written marker often says `~/`, and launchd expands nothing.
+        std::fs::write(root.join(repo::MARKER), "launcher = \"~/bin/run.sh\"\n").unwrap();
+        if let Some(home) = std::env::var_os("HOME") {
+            assert_eq!(
+                scheduled_binary(&root),
+                PathBuf::from(home).join("bin/run.sh")
+            );
+        }
+
+        // A `#` is part of the value: the marker format has no inline comments.
+        std::fs::write(root.join(repo::MARKER), "launcher = \"/tmp/a#b\"\n").unwrap();
+        assert_eq!(scheduled_binary(&root), PathBuf::from("/tmp/a#b"));
 
         let _ = std::fs::remove_dir_all(&root);
     }

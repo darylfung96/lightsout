@@ -27,30 +27,45 @@ fn looks_like_repo(path: &Path) -> bool {
 /// this binary. A workspace sets it when the scheduler's own process must keep one
 /// code identity across upgrades: macOS attaches a disk permission to the exact
 /// file launchd starts, so replacing the binary revokes the permission and every
-/// scheduled run dies before it writes a line. A relative value resolves against
-/// the workspace root. No value means "start the binary", which is the default.
+/// scheduled run dies before it writes a line. The value is absolute, `~/…`, or
+/// relative to the workspace root; the launcher receives the same arguments the
+/// binary would. No value means "start the binary", which is the default.
 pub fn launcher(root: &Path) -> Option<PathBuf> {
     let body = fs::read_to_string(root.join(MARKER)).ok()?;
     for line in body.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
         if key.trim() != "launcher" {
             continue;
         }
+        // The marker format has no inline comments, so a `#` here belongs to the
+        // value. Only the quotes around a value are syntax.
         let value = value.trim().trim_matches(['"', '\'']);
         if value.is_empty() {
             return None;
         }
-        let path = PathBuf::from(value);
-        return Some(if path.is_absolute() {
-            path
-        } else {
-            root.join(path)
-        });
+        return Some(expand_home(value).unwrap_or_else(|| {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
+            }
+        }));
     }
     None
+}
+
+/// `~/…` is common in a hand-written marker and no shell expands it for launchd.
+fn expand_home(value: &str) -> Option<PathBuf> {
+    let rest = value.strip_prefix("~/")?;
+    let home = env::var("HOME").ok().filter(|home| !home.is_empty())?;
+    Some(PathBuf::from(home).join(rest))
 }
 
 /// A marker wins over the legacy shape, because a directory can contain both a
