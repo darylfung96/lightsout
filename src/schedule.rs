@@ -82,7 +82,7 @@ pub fn run(root: &Path, argv: &[String]) -> i32 {
             }
         },
     };
-    let binary = binary_path();
+    let binary = scheduled_binary(root);
     if launchd {
         let path_env = scheduled_path();
         println!(
@@ -116,6 +116,25 @@ fn binary_path() -> PathBuf {
         .ok()
         .and_then(|path| std::fs::canonicalize(&path).ok())
         .unwrap_or_else(|| PathBuf::from("lightsout"))
+}
+
+/// What a printed trigger starts. A workspace that names a `launcher` in its marker
+/// gets that program, so an upgrade of the binary does not change the program a
+/// scheduler holds a permission for. A launcher that is missing is not silently
+/// swapped for the binary: the printed line would then fail on the first run and
+/// nobody would know why, so the warning names it and the trigger keeps it.
+fn scheduled_binary(root: &Path) -> PathBuf {
+    let Some(launcher) = repo::launcher(root) else {
+        return binary_path();
+    };
+    if !launcher.is_file() {
+        eprintln!(
+            "schedule: the launcher in {} is not a file: {}",
+            repo::MARKER,
+            launcher.display()
+        );
+    }
+    launcher
 }
 
 /// The five cron fields for a recorded time. `status <name>` prints this same
@@ -276,6 +295,41 @@ mod tests {
 
         let auto = cron("backup", Path::new("/usr/local/bin/lightsout"), 2, 30, true);
         assert!(auto.contains("/usr/local/bin/lightsout run backup --auto-repair"));
+    }
+
+    #[test]
+    fn a_launcher_in_the_marker_is_what_the_scheduler_starts() {
+        let root = env::temp_dir().join(format!("lightsout-launcher-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let launcher = root.join("run.sh");
+        std::fs::write(&launcher, "#!/bin/sh\n").unwrap();
+
+        std::fs::write(root.join(repo::MARKER), "schema = 1\n").unwrap();
+        assert_eq!(
+            scheduled_binary(&root),
+            binary_path(),
+            "no launcher means the binary itself"
+        );
+
+        std::fs::write(
+            root.join(repo::MARKER),
+            format!(
+                "schema = 1\n# a stable program for the scheduler\nlauncher = \"{}\"\n",
+                launcher.display()
+            ),
+        )
+        .unwrap();
+        assert_eq!(scheduled_binary(&root), launcher);
+
+        std::fs::write(root.join(repo::MARKER), "launcher = run.sh\n").unwrap();
+        assert_eq!(
+            scheduled_binary(&root),
+            root.join("run.sh"),
+            "a relative path belongs to the workspace"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

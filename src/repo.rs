@@ -23,6 +23,36 @@ fn looks_like_repo(path: &Path) -> bool {
     path.join("jobs").is_dir() && path.join("lib").is_dir()
 }
 
+/// `launcher` in the marker names the program a scheduler should start instead of
+/// this binary. A workspace sets it when the scheduler's own process must keep one
+/// code identity across upgrades: macOS attaches a disk permission to the exact
+/// file launchd starts, so replacing the binary revokes the permission and every
+/// scheduled run dies before it writes a line. A relative value resolves against
+/// the workspace root. No value means "start the binary", which is the default.
+pub fn launcher(root: &Path) -> Option<PathBuf> {
+    let body = fs::read_to_string(root.join(MARKER)).ok()?;
+    for line in body.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "launcher" {
+            continue;
+        }
+        let value = value.trim().trim_matches(['"', '\'']);
+        if value.is_empty() {
+            return None;
+        }
+        let path = PathBuf::from(value);
+        return Some(if path.is_absolute() {
+            path
+        } else {
+            root.join(path)
+        });
+    }
+    None
+}
+
 /// A marker wins over the legacy shape, because a directory can contain both a
 /// workspace and unrelated `jobs/`/`lib/` directories.
 pub fn is_workspace(path: &Path) -> bool {

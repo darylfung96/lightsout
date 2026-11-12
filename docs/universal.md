@@ -93,6 +93,22 @@ run contract and the state files. The printed cron line runs
 name. The launchd form sets `LIGHTSOUT_HOME`, `HOME` and a `PATH`, because
 launchd starts with a minimal environment.
 
+A workspace may name a `launcher` in `lightsout.toml`, and then every printed
+line starts that program instead of the binary:
+
+```toml
+launcher = "/Users/me/.local/libexec/lightsout-run.sh"
+```
+
+The value can be relative to the workspace, so `launcher = "bin/run.sh"` names
+`<workspace>/bin/run.sh`. This exists for hosts where the scheduler's own
+process must keep one identity: macOS attaches a disk permission to the exact
+file launchd starts, so an upgraded binary loses it and every scheduled run
+dies before writing a line. A wrapper of three lines has the same bytes and the
+same permission after every upgrade of the binary; a launcher that is not a
+file is reported on stderr and still printed, so the installed plist shows what
+will actually run.
+
 ## Failure modes
 
 - A malformed `jobs.json` fails every job-resolving verb with exit 2 instead of
