@@ -721,6 +721,15 @@ pub fn run(argv: &[String]) -> i32 {
         .filter(|rec| args.name.as_deref().is_none_or(|name| name == rec.name))
         .collect();
 
+    // An empty table is not an error, but it explains nothing either. A fresh
+    // install is exactly this state, so say what to do next.
+    if data.is_empty() && !args.json && args.html.is_none() {
+        println!("no jobs yet");
+        println!("  add one with: lightsout job add <name> --command '<command>'");
+        println!("  or create a workspace with: lightsout init <dir>");
+        return 0;
+    }
+
     if args.json {
         let values: Vec<Value> = data.iter().map(to_json).collect();
         match serde_json::to_string_pretty(&values) {

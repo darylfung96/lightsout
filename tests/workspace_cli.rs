@@ -217,13 +217,16 @@ fn version_and_unknown_workspace() {
         format!("lightsout {}", env!("CARGO_PKG_VERSION"))
     );
 
+    // A directory that is not a workspace, with an empty registry, is the state
+    // of a fresh install. It is answerable, not an error: the platform is
+    // usable from anywhere, and a name lookup (not the directory) decides.
     let status = run_env(
         temp.path(),
         &["status"],
         &[("LIGHTSOUT_REPO", temp.path().to_str().unwrap())],
     );
-    assert_eq!(code(&status), 64, "{}", text(&status));
-    assert!(text(&status).contains("not a LightsOut workspace"));
+    assert_eq!(code(&status), 0, "{}", text(&status));
+    assert!(text(&status).contains("no jobs yet"), "{}", text(&status));
 }
 
 #[test]

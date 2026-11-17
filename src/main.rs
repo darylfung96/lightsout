@@ -19,7 +19,7 @@ mod triage;
 mod workspace;
 
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process;
 
 fn main() {
@@ -159,24 +159,18 @@ fn run(argv: &[String]) -> i32 {
 }
 
 fn with_workspace(body: impl FnOnce(&Path) -> i32) -> i32 {
-    match workspace_root() {
-        Ok(root) => body(&root),
-        Err(code) => code,
-    }
-}
-
-fn workspace_root() -> Result<PathBuf, i32> {
     let root = repo::root();
-    // A registry entry names its own job directory and workspace, so the
-    // current directory does not have to be a workspace for a registered job.
-    if repo::is_workspace(&root) || registry::is_configured() {
-        Ok(root)
-    } else {
-        eprintln!("not a LightsOut workspace: {}", root.display());
-        eprintln!("  create one with: lightsout init <dir>");
-        eprintln!("  or register a job with: lightsout job add <name> --job-dir <dir>");
-        Err(64)
+    // Universal mode: the directory does not have to be a workspace, and a
+    // fresh install has registered nothing yet. Refusing every verb there made
+    // `status` print "not a LightsOut workspace" on a machine whose binary sat
+    // outside a checkout, which is exactly the case universal mode exists for.
+    // An empty answer is the right answer; a name lookup still fails with
+    // `no such job`.
+    if !repo::is_workspace(&root) && !registry::is_configured() {
+        eprintln!("no jobs yet: add one with `lightsout job add <name> --command '<command>'`");
+        eprintln!("  or create a workspace with: lightsout init <dir>");
     }
+    body(&root)
 }
 
 fn run_verb(verb: &str, argv: &[String]) -> i32 {

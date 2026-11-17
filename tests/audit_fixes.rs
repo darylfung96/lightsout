@@ -400,3 +400,37 @@ fn a_repair_scope_cannot_name_the_workspaces_lib() {
     );
     let _ = std::fs::remove_dir_all(&outside);
 }
+
+#[test]
+fn a_fresh_install_answers_status_without_a_workspace() {
+    let s = Sandbox::new("af-bare");
+    let outside = s.path("../af-bare-root");
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).unwrap();
+    let pin = outside.to_string_lossy().into_owned();
+
+    // The sandbox binary lives under target/, whose checkout is a workspace, so
+    // the root is pinned to a directory that is neither a workspace nor a
+    // registry — the state of a machine that installed the binary alone.
+    let out = s.run_env(&["status"], &[("LIGHTSOUT_REPO", &pin)]);
+    assert_eq!(
+        code(&out),
+        0,
+        "status answers instead of refusing: {}",
+        combined(&out)
+    );
+    assert!(
+        combined(&out).contains("no jobs yet"),
+        "the empty answer says what to do next: {}",
+        combined(&out)
+    );
+
+    let out = s.run_env(&["run", "ghost"], &[("LIGHTSOUT_REPO", &pin)]);
+    assert_eq!(code(&out), 64, "an unknown name is a usage error");
+    assert!(
+        stderr(&out).contains("no such job"),
+        "the refusal names the job: {}",
+        stderr(&out)
+    );
+    let _ = std::fs::remove_dir_all(&outside);
+}

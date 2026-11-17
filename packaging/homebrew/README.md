@@ -11,7 +11,7 @@ A live tap needs a real checksum, because Homebrew refuses a formula whose
 tag tarball and fill `sha256` with:
 
 ```sh
-curl -fsSL https://github.com/darylfung96/lightsout/archive/refs/tags/v0.1.1.tar.gz \
+curl -fsSL https://github.com/darylfung96/lightsout/archive/refs/tags/v0.1.2.tar.gz \
   | shasum -a 256
 ```
 
