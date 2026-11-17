@@ -137,18 +137,40 @@ u_guard_stage() {
 }
 
 u_guard_lock() {
-  local pid=""
-  if [ -d "$STATE/lock" ]; then
+  local pid="" tries=0
+  # A claim is one `mkdir`, because that is the only test-and-set the shell
+  # has. Check-then-create let two ticks both find no lock and both run.
+  if [ "$DRY" = 1 ]; then
+    if [ -d "$STATE/lock" ]; then
+      pid=$(cat "$STATE/lock/pid" 2>/dev/null || true)
+      if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
+        u_held "another run (pid $pid) holds the lock"
+      fi
+      u_say "plan: would clear stale lock (pid ${pid:-unknown})"
+    fi
+    u_say "plan: would take the lock"
+    return 0
+  fi
+  mkdir -p "$STATE"
+  while :; do
+    if mkdir "$STATE/lock" 2>/dev/null; then
+      printf '%s\n' "$$" > "$STATE/lock/pid"
+      return 0
+    fi
     pid=$(cat "$STATE/lock/pid" 2>/dev/null || true)
     if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
       u_held "another run (pid $pid) holds the lock"
     fi
+    # The winner writes its pid in the two instructions after `mkdir`. An empty
+    # read is that window, not a stale lock, so wait for it before clearing.
+    if [ -z "${pid:-}" ] && [ "$tries" -lt 20 ]; then
+      tries=$((tries + 1))
+      sleep 0.1
+      continue
+    fi
     u_say "clearing stale lock (pid ${pid:-unknown})"
     rm -rf "$STATE/lock"
-  fi
-  if [ "$DRY" = 1 ]; then u_say "plan: would take the lock"; return 0; fi
-  mkdir -p "$STATE/lock"
-  printf '%s\n' "$$" > "$STATE/lock/pid"
+  done
 }
 
 # u_exit — the run's EXIT trap, and the last chance to say why it stopped. It
@@ -161,8 +183,14 @@ u_guard_lock() {
 # touches nothing; and a script that sourced this file without a state
 # directory is left alone rather than writing a block at the filesystem root.
 u_exit() {
-  local rc="${U_EXIT_RC:-$?}"
-  [ -n "${STATE:-}" ] && rm -rf "$STATE/lock"
+  local rc="${U_EXIT_RC:-$?}" owner=""
+  # Only the run that wrote this pid may release the lock. A held tick never
+  # took it, and `plan` touches nothing, so deleting the directory here would
+  # hand the unit to the next tick while its owner was still working.
+  if [ -n "${STATE:-}" ]; then
+    owner=$(cat "$STATE/lock/pid" 2>/dev/null || true)
+    if [ "${owner:-}" = "$$" ]; then rm -rf "$STATE/lock"; fi
+  fi
   if [ "$rc" -eq 1 ] && [ "${U_BLOCKED:-0}" != 1 ] && [ "${DRY:-0}" != 1 ] \
      && [ -n "${STATE:-}" ] && [ -n "${LOG:-}" ]; then
     U_BLOCKED=1
@@ -243,6 +271,8 @@ u_done() {
   local unit="${1:-$UNIT}"
   if [ "$DRY" = 1 ]; then u_say "plan: would mark $unit done"; return 0; fi
   : > "$STATE/done/$unit"
-  rm -f "$STATE/blocked"
+  # `-rf`, because a damaged run can leave a directory or a symlink at that
+  # path and `rm -f` would fail, keeping a finished job blocked forever.
+  rm -rf "$STATE/blocked"
   u_say "done: $unit"
 }

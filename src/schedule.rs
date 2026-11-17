@@ -61,6 +61,9 @@ pub fn run(root: &Path, argv: &[String]) -> i32 {
         println!("{USAGE}");
         return 64;
     };
+    if !repo::usable_name(&name) {
+        return repo::name_refusal(&name);
+    }
     let paths = repo::Paths::new(root, &name);
     if !paths.has_job() {
         eprintln!("no such job: {name}");
@@ -90,7 +93,7 @@ pub fn run(root: &Path, argv: &[String]) -> i32 {
             plist(&name, &paths, &binary, hour, minute, auto, &path_env)
         );
     } else {
-        println!("{}", cron(&name, &binary, hour, minute, auto));
+        println!("{}", cron(&name, &paths.repo, &binary, hour, minute, auto));
     }
     0
 }
@@ -146,17 +149,21 @@ pub fn cron_time(hour: u32, minute: u32) -> String {
 
 /// The cron line runs through `/bin/sh -c`, so a path with a space is quoted
 /// for that shell rather than for crontab's field parser.
-fn cron(name: &str, binary: &Path, hour: u32, minute: u32, auto: bool) -> String {
+fn cron(name: &str, root: &Path, binary: &Path, hour: u32, minute: u32, auto: bool) -> String {
     format!(
         "# {name} — from state/expect ({hour:02}:{minute:02}); paste into crontab -e\n\
          {} {}",
         cron_time(hour, minute),
-        cron_command(name, binary, auto)
+        cron_command(name, root, binary, auto)
     )
 }
 
-fn cron_command(name: &str, binary: &Path, auto: bool) -> String {
-    let mut parts = Vec::new();
+fn cron_command(name: &str, root: &Path, binary: &Path, auto: bool) -> String {
+    // cron starts in `$HOME`, and `run` resolves a name from the current
+    // directory first, so the line has to enter the workspace. Without this,
+    // an installed binary looked for a workspace in `$HOME` and exited 64
+    // forever while `schedule` reported success.
+    let mut parts = vec![format!("cd {} &&", shell_quote(&root.to_string_lossy()))];
     if let Ok(home) = env::var("LIGHTSOUT_HOME") {
         if !home.is_empty() {
             parts.push(format!("LIGHTSOUT_HOME={}", shell_quote(&home)));
@@ -214,7 +221,7 @@ fn plist(
          <plist version=\"1.0\">\n\
          <dict>\n\
          \x20 <key>Label</key>\n\
-         \x20 <string>com.lightsout.{name}</string>\n\
+         \x20 <string>{label}</string>\n\
          \x20 <key>ProgramArguments</key>\n\
          \x20 <array>\n\
          \x20   <string>{binary}</string>\n\
@@ -240,9 +247,11 @@ fn plist(
          \x20 </dict>\n\
          </dict>\n\
          </plist>",
+        label = xml_escape(&format!("com.lightsout.{name}")),
         binary = xml_escape(&binary.to_string_lossy()),
         workdir = xml_escape(&workdir.to_string_lossy()),
         log = xml_escape(&log.to_string_lossy()),
+        name = xml_escape(name),
         auto_arg = auto_arg,
     )
 }
@@ -283,17 +292,28 @@ mod tests {
     fn the_cron_line_is_one_shell_command() {
         let line = cron(
             "backup",
+            Path::new("/opt/office"),
             Path::new("/usr/local/bin/lightsout"),
             2,
             30,
             false,
         );
         assert!(line.contains("30 2 * * *"));
-        assert!(line.contains("/usr/local/bin/lightsout run backup"));
+        assert!(
+            line.contains("cd /opt/office && /usr/local/bin/lightsout run backup"),
+            "cron starts in $HOME: {line}"
+        );
         assert!(!line.contains("--workspace"));
         assert!(!line.contains("--auto-repair"));
 
-        let auto = cron("backup", Path::new("/usr/local/bin/lightsout"), 2, 30, true);
+        let auto = cron(
+            "backup",
+            Path::new("/opt/office"),
+            Path::new("/usr/local/bin/lightsout"),
+            2,
+            30,
+            true,
+        );
         assert!(auto.contains("/usr/local/bin/lightsout run backup --auto-repair"));
     }
 

@@ -5,7 +5,7 @@ set -euo pipefail
 . "$REPO/lib/guards.sh"
 . "$REPO/lib/memory.sh"
 
-stage_write() { mkdir -p "$OUT"; printf 'hello %s\n' "$(date -Iseconds)" > "$OUT/hello.txt"; }
+stage_write() { mkdir -p "$OUT"; printf 'hello %s %s\n' "$UNIT" "$(date -Iseconds)" > "$OUT/hello.txt"; }
 
 u_guard_day
 u_guard_lock
@@ -31,8 +31,11 @@ fi
 # re-checks the same gate without charging the 25c a second time. The charge is
 # booked with the artifact, never before it, so the ledger never claims money
 # for work that did not happen.
-if [ -s "$OUT/hello.txt" ]; then
-  u_say "stage 1: hello.txt already on disk, paid work skipped"
+# The artifact names the unit it was paid for. `done/<unit>` is per unit, so an
+# artifact from yesterday must not stand in for today's: without the match, a
+# new unit's run skipped its only paid stage and still reported DONE.
+if [ -s "$OUT/hello.txt" ] && grep -qF "hello $UNIT " "$OUT/hello.txt"; then
+  u_say "stage 1: hello.txt already on disk for $UNIT, paid work skipped"
 else
   u_sh "stage 1: write artifact" stage_write
   u_spend 25 "stage 1"

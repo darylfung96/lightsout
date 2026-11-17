@@ -44,18 +44,21 @@ TXT
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
+# Misuse exits 64, the same code `bin/job` and `bin/scaffold` use, so a caller
+# can tell a wrong command from a failed download.
+usage_fail() { printf 'install.sh: %s\n' "$*" >&2; exit 64; }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --version)     [ "$#" -ge 2 ] || fail "--version needs a value"; VERSION="$2"; shift 2 ;;
+    --version)     [ "$#" -ge 2 ] || usage_fail "--version needs a value"; VERSION="$2"; shift 2 ;;
     --version=*)   VERSION="${1#*=}"; shift ;;
-    --prefix)      [ "$#" -ge 2 ] || fail "--prefix needs a value"; PREFIX="$2"; shift 2 ;;
+    --prefix)      [ "$#" -ge 2 ] || usage_fail "--prefix needs a value"; PREFIX="$2"; shift 2 ;;
     --prefix=*)    PREFIX="${1#*=}"; shift ;;
-    --workspace)   [ "$#" -ge 2 ] || fail "--workspace needs a value"; WORKSPACE="$2"; shift 2 ;;
+    --workspace)   [ "$#" -ge 2 ] || usage_fail "--workspace needs a value"; WORKSPACE="$2"; shift 2 ;;
     --workspace=*) WORKSPACE="${1#*=}"; shift ;;
     --dry-run)     DRY_RUN=1; shift ;;
     -h|--help)     usage; exit 0 ;;
-    *)             fail "unknown option: $1 (try --help)" ;;
+    *)             usage_fail "unknown option: $1 (try --help)" ;;
   esac
 done
 
@@ -70,7 +73,7 @@ case "$OS:$ARCH" in
   Darwin:x86_64)         TARGET="x86_64-apple-darwin" ;;
   Linux:x86_64|Linux:amd64) TARGET="x86_64-unknown-linux-musl" ;;
   Linux:aarch64|Linux:arm64) TARGET="aarch64-unknown-linux-gnu" ;;
-  *) fail "no release asset for $OS/$ARCH (supported: macOS arm64/x86_64, Linux x86_64/aarch64)" ;;
+  *) usage_fail "no release asset for $OS/$ARCH (supported: macOS arm64/x86_64, Linux x86_64/aarch64)" ;;
 esac
 
 ASSET="lightsout-${TARGET}.tar.gz"
@@ -143,7 +146,11 @@ if [ "$CHECK_SHA" = "sha256sum" ]; then
 else
   actual=$(shasum -a 256 "$tmp/$ASSET" | awk '{print $1}')
 fi
-if [ "$actual" != "$expected" ]; then
+# Hex is case-insensitive: several checksum sources publish upper case, and the
+# out-of-band pin is exactly the path that must accept it.
+expected_lc=$(printf '%s' "$expected" | tr 'A-F' 'a-f')
+actual_lc=$(printf '%s' "$actual" | tr 'A-F' 'a-f')
+if [ "$actual_lc" != "$expected_lc" ]; then
   fail "checksum mismatch for $ASSET (expected $expected, got $actual)"
 fi
 say "verified sha256 $actual"

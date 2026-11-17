@@ -443,6 +443,9 @@ pub fn build(repo: &Path, paths: &Paths) -> String {
 }
 
 pub fn run(repo: &Path, name: &str) -> i32 {
+    if !crate::repo::usable_name(name) {
+        return crate::repo::name_refusal(name);
+    }
     let paths = Paths::new(repo, name);
     if !paths.has_job() {
         eprintln!("no such job: {name}");

@@ -5,8 +5,10 @@
 //! run contract's; an older or damaged line degrades field by field instead of
 //! taking the whole view down.
 
+use std::collections::VecDeque;
 use std::fs;
 use std::io;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use crate::clock;
@@ -86,12 +88,53 @@ pub fn read_lossy(path: &Path) -> String {
     }
 }
 
+/// Visit a file's lines one at a time.
+///
+/// A log has no size limit, so reading it whole to find one stage line cost
+/// memory in proportion to the file: 164 MB of log became ~346 MB resident on
+/// every `status`, and again on every dashboard refresh. Streaming keeps that
+/// to the longest line. Bytes that are not UTF-8 become replacement characters,
+/// the same rule as `read_lossy`, rather than dropping the file.
+pub fn for_each_line(path: &Path, mut visit: impl FnMut(&str)) {
+    let Ok(file) = fs::File::open(path) else {
+        return;
+    };
+    let mut reader = io::BufReader::new(file);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) => break,
+            Ok(_) => {
+                let text = String::from_utf8_lossy(&buf);
+                visit(text.trim_end_matches(['\n', '\r']));
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+/// The last `keep` lines of a file, oldest first.
+pub fn tail_lines(path: &Path, keep: usize) -> Vec<String> {
+    let mut ring: VecDeque<String> = VecDeque::with_capacity(keep);
+    for_each_line(path, |line| {
+        if ring.len() == keep {
+            ring.pop_front();
+        }
+        ring.push_back(line.to_string());
+    });
+    ring.into()
+}
+
 /// A block for `run`, `retry` and `status`: the marker's existence is the
 /// stop, even if the line was damaged to empty. `diagnose` deliberately uses
 /// `read_blocked` instead: its Python predecessor treated an empty marker as
 /// "not blocked", and the report must stay a read-only explanation.
 pub fn blocked_marker(path: &Path) -> Option<Blocked> {
-    if path.is_file() {
+    // Existence is the stop, whatever the type: a directory or a dangling
+    // symlink at that path is still a marker somebody left, and ignoring it
+    // re-opened a stopped job to the next scheduler tick.
+    if fs::symlink_metadata(path).is_ok() {
         Some(blocked_fields(&read_lossy(path)))
     } else {
         None
@@ -238,10 +281,22 @@ pub fn last_run_row(state: &Path) -> Option<(String, Option<i64>)> {
         .collect();
     let row = rows.pop()?;
     let parts: Vec<&str> = row.split('\t').collect();
-    if parts.len() < 3 {
+    // A truncated line keeps the fields it has: the last line is the newest
+    // run, and dropping the row made `status` claim the job never ran.
+    if parts.len() < 2 {
         return None;
     }
     Some((parts[0].to_string(), parts[1].parse::<i64>().ok()))
+}
+
+/// One charge, as a number that cannot make the total go backwards or wrap.
+/// `u_spend` writes digits, but a hand-edited ledger can hold a negative or a
+/// value near `i64::MAX`; either one used to make this sum overflow, which
+/// panicked every reader in a debug build and wrapped into a negative total in
+/// release, so the spend guard passed on a budget already gone.
+fn charge(parts: &[&str]) -> Option<i64> {
+    let cents = parts[1].parse::<i64>().ok()?;
+    Some(cents.max(0))
 }
 
 /// Cents booked today in `state/ledger.tsv`; only today's date prefix counts.
@@ -252,8 +307,8 @@ pub fn spend_today(state: &Path, today: &str) -> i64 {
         if parts.len() < 2 || !parts[0].starts_with(today) {
             continue;
         }
-        if let Ok(cents) = parts[1].parse::<i64>() {
-            total += cents;
+        if let Some(cents) = charge(&parts) {
+            total = total.saturating_add(cents);
         }
     }
     total
@@ -267,8 +322,8 @@ pub fn spend_total(state: &Path) -> i64 {
         if parts.len() < 2 {
             continue;
         }
-        if let Ok(cents) = parts[1].parse::<i64>() {
-            total += cents;
+        if let Some(cents) = charge(&parts) {
+            total = total.saturating_add(cents);
         }
     }
     total

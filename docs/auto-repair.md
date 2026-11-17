@@ -161,10 +161,12 @@ episodes=/data/media/episodes
 The agent still writes `episodes/030/lesson-raw.md`; the manager maps the first
 component to the root it was given. The mapping is the only place an absolute
 path appears, and `repair.allow` is itself protected, so an agent cannot widen
-its own scope. An external root may not sit inside the job directory, inside
-the workspace, or above the workspace, because each of those would let a
-proposal reach the job's own `state/`, another job, `job.sh` or `triage.conf`;
-the manager canonicalizes the root and refuses the overlap.
+its own scope. An external root may not sit inside the job directory, inside a
+workspace, or above the workspace, because each of those would let a proposal
+reach the job's own `state/`, another job, `job.sh` or `triage.conf`; the
+manager canonicalizes the root and refuses the overlap. The workspace test
+follows the root, not the job directory. A registered job that lives outside its
+workspace cannot lend a repair `<workspace>/lib`.
 
 An external root may name an artifact folder such as `episodes/`, because that
 is where the lesson lives. It should not name `pipeline/` or `lib/`, because

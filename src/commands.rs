@@ -209,6 +209,9 @@ struct RunOptions<'a> {
 }
 
 fn run_job_with(repo: &Path, name: &str, verb: &str, options: RunOptions<'_>) -> i32 {
+    if !crate::repo::usable_name(name) {
+        return crate::repo::name_refusal(name);
+    }
     let RunOptions {
         dry,
         class,
@@ -267,8 +270,26 @@ fn run_job_with(repo: &Path, name: &str, verb: &str, options: RunOptions<'_>) ->
         if let Err(error) = record(&paths, verb, rc) {
             eprintln!("job: cannot record the run: {error}");
         }
+        return verdict(&paths, rc);
     }
     rc
+}
+
+/// The manager's exit code, decided from what the run left on disk.
+///
+/// The contract has three codes, and `2` means blocked everywhere in this tool.
+/// So a job that exits `2` without writing `state/blocked` has failed, not
+/// blocked: `triage`, `status` and `check` all read that marker and would
+/// disagree with a bare `2`. Any other code outside `0`/`1`/`2` is a failure
+/// too, because a scheduler can only act on the documented values.
+fn verdict(paths: &Paths, rc: i32) -> i32 {
+    if rc == 0 {
+        return 0;
+    }
+    if rc == 2 && state::blocked_marker(&paths.state.join("blocked")).is_some() {
+        return 2;
+    }
+    1
 }
 
 /// One completed run: `state/last` keeps the last fifty lines, `state/runs.tsv`
@@ -372,6 +393,9 @@ enum Check {
 /// job; an alarm that repaired would be a second runner.
 pub fn check(repo: &Path, want: Option<&str>) -> i32 {
     if let Some(name) = want {
+        if !crate::repo::usable_name(name) {
+            return crate::repo::name_refusal(name);
+        }
         if !Paths::new(repo, name).has_job() {
             eprintln!("no such job: {name}");
             return 64;
@@ -403,10 +427,12 @@ fn check_job(paths: &Paths, check_log: &Path) -> Check {
     let state_dir = &paths.state;
     let Some((_, expect)) = state::expect_time(state_dir) else {
         // A schedule typo is not "nothing to do": without a valid expect time
-        // no later tick can decide the job is late, so fail the check and make
+        // no later tick can decide the job is late, so fail the check and let
         // the scheduler surface it instead of returning a quiet zero. A job
-        // with no expect file is still never late.
-        if state_dir.join("expect").is_file() {
+        // with no expect file is still never late. Existence, not
+        // `is_file()`: a directory or a dangling symlink named `expect` is a
+        // damaged schedule, and the job would otherwise never be late again.
+        if fs::symlink_metadata(state_dir.join("expect")).is_ok() {
             eprintln!("check: {name}: state/expect is not HH:MM");
             return Check::Blocked;
         }
@@ -431,7 +457,8 @@ fn check_job(paths: &Paths, check_log: &Path) -> Check {
     if state::lock_live(state_dir) {
         return Check::Quiet;
     }
-    if state_dir.join("blocked").is_file() {
+    // Existence, like `blocked_marker`: a damaged stop marker is still a stop.
+    if fs::symlink_metadata(state_dir.join("blocked")).is_ok() {
         println!("blocked: {name} missed its {expect} run");
         return Check::Blocked;
     }
@@ -592,6 +619,9 @@ pub fn retry(repo: &Path, argv: &[String]) -> i32 {
         println!("{}", USAGE);
         return 64;
     };
+    if !crate::repo::usable_name(name) {
+        return crate::repo::name_refusal(name);
+    }
     let mut repair = env::var("NOOP_REPAIR")
         .ok()
         .filter(|r| !r.is_empty())
@@ -1495,6 +1525,9 @@ pub fn heal(repo: &Path, argv: &[String]) -> i32 {
         println!("{}", USAGE);
         return 64;
     };
+    if !crate::repo::usable_name(name) {
+        return crate::repo::name_refusal(name);
+    }
     let mut apply = false;
     let mut revert: Option<usize> = None;
     let mut i = 1;
@@ -1626,16 +1659,27 @@ pub fn heal(repo: &Path, argv: &[String]) -> i32 {
 }
 
 pub fn unblock(repo: &Path, name: &str) -> i32 {
+    if !crate::repo::usable_name(name) {
+        return crate::repo::name_refusal(name);
+    }
     if !Paths::new(repo, name).has_job() {
         eprintln!("no such job: {name}");
         return 64;
     }
     let paths = job_env(repo, name);
     let blocked = paths.state.join("blocked");
-    if blocked.is_file() {
+    if fs::symlink_metadata(&blocked).is_ok() {
         let raw = state::read_lossy(&blocked);
         let raw = raw.trim_end_matches(['\n', '\r']);
-        if let Err(error) = fs::remove_file(&blocked) {
+        // The marker is not always a regular file: a damaged run can leave a
+        // directory or a dangling symlink there, and `unblock` must clear it
+        // rather than keep saying the job was never blocked.
+        let removed = if blocked.is_dir() {
+            fs::remove_dir_all(&blocked)
+        } else {
+            fs::remove_file(&blocked)
+        };
+        if let Err(error) = removed {
             eprintln!("unblock: cannot remove {}: {error}", blocked.display());
             return 2;
         }

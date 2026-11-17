@@ -99,6 +99,23 @@ check "pinned hash installs" 0 "$?"
 grep -q "verified sha256" "$TMP/pinned.log"
 check "pinned hash verifies" 0 "$?"
 
+# Misuse exits 64, not 1: a caller has to tell a wrong command from a failed
+# download.
+rc=0
+sh "$REPO/install.sh" --bogus > "$TMP/usage.log" 2>&1 || rc=$?
+check "an unknown option exits 64" 64 "$rc"
+rc=0
+sh "$REPO/install.sh" --version > "$TMP/novalue.log" 2>&1 || rc=$?
+check "a missing option value exits 64" 64 "$rc"
+
+# A pinned hash in upper case is the same hash: several checksum sources publish
+# hex that way, and the out-of-band pin is the path that must accept it.
+upper=$(printf '%s' "$hash" | tr 'a-f' 'A-F')
+LIGHTSOUT_SHA256="$upper" LIGHTSOUT_BASE_URL="file://$TMP/release-pinned" \
+  LIGHTSOUT_VERSION=9.9.9 sh "$REPO/install.sh" --prefix "$TMP/upper-prefix" \
+  > "$TMP/upper.log" 2>&1
+check "an upper-case pinned hash installs" 0 "$?"
+
 echo
 if [ "$failures" -eq 0 ]; then
   echo "all installer checks passed"

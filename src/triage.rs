@@ -426,6 +426,9 @@ pub fn run(repo: &Path, argv: &[String]) -> i32 {
         eprintln!("usage: lightsout triage <job> [--json]");
         return 64;
     };
+    if !crate::repo::usable_name(&name) {
+        return crate::repo::name_refusal(&name);
+    }
     let paths = Paths::new(repo, &name);
     if !paths.has_job() {
         eprintln!("no such job: {name}");

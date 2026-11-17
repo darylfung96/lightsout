@@ -101,6 +101,12 @@ command job, which is a job with no `job.sh` and no guards, and to the manager's
 own errors. A guarded job that means "failed" must block instead, and the class
 is what says whether a retry could help.
 
+`lightsout run` reports one of those three codes, whatever the script exited
+with. `0` stays `0`, and `2` is kept only when the run wrote `state/blocked`.
+Every other non-zero code becomes `1`. The script's own code stays in
+`state/last` and `last_exit`. A wrapper that exits `3` does not invent a fourth
+value for a scheduler.
+
 ## Workspace
 
 A workspace is a directory with a `lightsout.toml` marker recording `schema`

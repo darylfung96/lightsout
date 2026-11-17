@@ -252,6 +252,19 @@ fn the_log_route_returns_the_tail() {
 }
 
 #[test]
+fn a_log_request_without_a_job_name_is_a_404() {
+    let fixture = fixture("bare-log");
+    let response = get(fixture.port, "/api/jobs/log");
+    assert!(
+        response.starts_with("HTTP/1.1 404"),
+        "a bare log route names no job: {response}"
+    );
+    // The panic this guards against killed the request thread; the page must
+    // still answer afterwards.
+    assert!(get(fixture.port, "/").starts_with("HTTP/1.1 200"));
+}
+
+#[test]
 fn an_unknown_job_is_a_404_and_starts_nothing() {
     let fixture = fixture("missing");
     assert!(post(fixture.port, "/api/jobs/ghost/fix").starts_with("HTTP/1.1 404"));

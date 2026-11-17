@@ -157,7 +157,14 @@ fn a_command_job_exit_code_is_the_gate() {
         0
     );
     let out = s.run(&["run", "bad"]);
-    assert_eq!(code(&out), 3, "the command's code is the job's code");
+    // The contract's three codes are the interface: a command that fails is 1,
+    // and its own code stays in `last_exit` so a human can still read it.
+    assert_eq!(
+        code(&out),
+        1,
+        "a failing command is a failed run: {}",
+        combined(&out)
+    );
     let row = s.row("bad");
     assert_eq!(
         row.get("state").and_then(|v| v.as_str()),

@@ -175,7 +175,7 @@ fn job_state(repo: &Path, name: &str) -> JobState {
         rec.since = state::mtime_iso(&st.join("done").join(&today));
     }
 
-    let blocked_now = st.join("blocked").is_file();
+    let blocked_now = fs::symlink_metadata(st.join("blocked")).is_ok();
     if blocked_now {
         if let Some(blocked) = state::blocked_marker(&st.join("blocked")) {
             rec.since = Some(blocked.iso);
@@ -191,8 +191,27 @@ fn job_state(repo: &Path, name: &str) -> JobState {
         rec.state = "running".into();
     }
 
+    // The state column describes the last completed run, so a failure after
+    // today's `done/<unit>` marker is a failure. The marker says the unit
+    // finished, not that the day is healthy, and hiding the 126 above it was
+    // the same silence the deliverable rule exists to break.
+    if !blocked_now && !locked {
+        if let Some(rc) = rec.last_exit {
+            if rc != 0 {
+                rec.state = "failed".into();
+                rec.since = rec.last_run.clone();
+            }
+        }
+    }
+
     if log.is_file() {
-        if let Some((when, number, what)) = last_stage_line(&state::read_lossy(&log)) {
+        let mut stage = None;
+        state::for_each_line(&log, |line| {
+            if let Some(hit) = stage_line(line) {
+                stage = Some(hit);
+            }
+        });
+        if let Some((when, number, what)) = stage {
             rec.stage = format!("stage {number}: {what}");
             if rec.last_run.is_none() {
                 rec.last_run = Some(when);
@@ -222,7 +241,17 @@ fn job_state(repo: &Path, name: &str) -> JobState {
         rec.expect = Some(label);
         rec.expect_minutes = Some(minutes);
         let now_minutes = clock::now_minutes();
-        rec.stale = now_minutes >= minutes && !done_today && !locked && !blocked_now && !rec.held;
+        // The same rule `check` applies, because a dashboard that says "all
+        // quiet" while `check` says "stale" is the silence this field exists to
+        // break. A declared deliverable decides on its own: a hold does not
+        // quiet it, and neither does `done/<unit>`.
+        let satisfied = match rec.deliverable_ok {
+            Some(true) => true,
+            Some(false) => false,
+            None => done_today,
+        };
+        let held_quiet = rec.deliverable_ok.is_none() && rec.held;
+        rec.stale = now_minutes >= minutes && !satisfied && !locked && !blocked_now && !held_quiet;
         if rec.stale {
             rec.overdue_minutes = Some(now_minutes - minutes);
         }
@@ -263,31 +292,23 @@ fn parse_heal_line(line: &str) -> HealLast {
 }
 
 /// The newest `[when] stage N: what` line in today's log.
-fn last_stage_line(body: &str) -> Option<(String, String, String)> {
-    let mut found = None;
-    for line in body.lines() {
-        let Some(close) = line.find("] stage ") else {
-            continue;
-        };
-        if !line.starts_with('[') {
-            continue;
-        }
-        let when = &line[1..close];
-        let rest = &line[close + "] stage ".len()..];
-        let Some(colon) = rest.find(": ") else {
-            continue;
-        };
-        let number = &rest[..colon];
-        if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit()) {
-            continue;
-        }
-        found = Some((
-            when.to_string(),
-            number.to_string(),
-            rest[colon + 2..].to_string(),
-        ));
+fn stage_line(line: &str) -> Option<(String, String, String)> {
+    let close = line.find("] stage ")?;
+    if !line.starts_with('[') {
+        return None;
     }
-    found
+    let when = &line[1..close];
+    let rest = &line[close + "] stage ".len()..];
+    let colon = rest.find(": ")?;
+    let number = &rest[..colon];
+    if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some((
+        when.to_string(),
+        number.to_string(),
+        rest[colon + 2..].to_string(),
+    ))
 }
 
 fn jobs(repo: &Path) -> Vec<JobState> {
@@ -687,6 +708,9 @@ pub fn run(argv: &[String]) -> i32 {
         }
     };
     if let Some(name) = &args.name {
+        if !repo::usable_name(name) {
+            return repo::name_refusal(name);
+        }
         if !repo::Paths::new(&repo, name).has_job() {
             eprintln!("no such job: {name}");
             return 64;

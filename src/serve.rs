@@ -278,7 +278,11 @@ fn route(stream: &mut TcpStream, server: &Arc<Server>, request: &Request) {
             let _ = respond(stream, 200, "OK", "application/json", body.as_bytes(), &[]);
         }
         ("GET", _) if path.starts_with("/api/jobs/") && path.ends_with("/log") => {
-            let name = &path["/api/jobs/".len()..path.len() - "/log".len()];
+            // `strip_suffix`, not arithmetic on `path.len()`: for the bare
+            // `/api/jobs/log` the two slices crossed and panicked this thread.
+            let Some(name) = path["/api/jobs/".len()..].strip_suffix("/log") else {
+                return not_found(stream);
+            };
             let name = match clean_name(name) {
                 Some(name) => name,
                 None => return not_found(stream),
@@ -678,10 +682,8 @@ fn respond(
 }
 
 fn tail(path: &Path, lines: usize) -> String {
-    let body = state::read_lossy(path);
-    let all: Vec<&str> = body.lines().collect();
-    let start = all.len().saturating_sub(lines);
-    let mut out = all[start..].join("\n");
+    let all = state::tail_lines(path, lines);
+    let mut out = all.join("\n");
     if out.is_empty() {
         out.push_str("(no log yet)\n");
     } else {

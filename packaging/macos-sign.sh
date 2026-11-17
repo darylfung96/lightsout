@@ -28,7 +28,12 @@ security import "$cert" -k "$keychain" -P "$MACOS_CERT_PASSWORD" \
   -T /usr/bin/codesign -T /usr/bin/security
 security set-key-partition-list -S apple-tool:,apple:,codesign: \
   -s -k "$keychain_password" "$keychain" >/dev/null
-security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+# Make this keychain the user search list for the signing step. The old list is
+# not re-appended by word-splitting `security list-keychains` output: that output
+# is shell-quoted per entry, so a path with a space became two bogus arguments
+# and `set -e` then aborted the release. The runner is disposable and the trap
+# deletes this keychain, so replacing the list is the deterministic form.
+security list-keychains -d user -s "$keychain"
 
 codesign --force --options runtime --timestamp \
   --keychain "$keychain" --sign "$MACOS_SIGNING_IDENTITY" "$binary"

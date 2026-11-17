@@ -92,6 +92,31 @@ pub fn is_workspace(path: &Path) -> bool {
     has_marker(path) || looks_like_repo(path)
 }
 
+/// A job name typed on the command line has to stay a single directory name
+/// under `jobs/`.
+///
+/// `Paths::new` joins the name without checking it, so `run ../../outside`
+/// executed a `job.sh` outside the workspace and wrote its state out of tree,
+/// while `list` and `status` never showed the job. Names discovered on disk or
+/// in the registry are already directory entries, so only typed input is
+/// checked.
+pub fn usable_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.starts_with('-')
+        && !name
+            .chars()
+            .any(|c| c == '/' || c == '\\' || c.is_control())
+}
+
+/// The `invalid job name` refusal every verb returns instead of running it.
+pub fn name_refusal(name: &str) -> i32 {
+    eprintln!("invalid job name: {name}");
+    eprintln!("  a name is one directory under jobs/, with no slash");
+    64
+}
+
 /// Every job directory, sorted, with hidden directories and directories that
 /// have no `job.sh` left out. One rule for `list`, `check` and `status` keeps a
 /// stray directory from appearing in one view and not another.

@@ -338,12 +338,11 @@ fn suggested_scope(deliverable: &str) -> String {
     format!("{name}={root}")
 }
 
-/// Turn the entries into scopes, refusing anything that could reach the
-/// workspace's own code. An external root may be anywhere except inside the
-/// workspace or above it, because either would let a repair edit `job.sh`,
-/// another job, or `triage.conf`.
+/// Turn the entries into scopes, refusing anything that could reach a
+/// workspace's own code. An external root may be anywhere except inside a
+/// workspace or above the job, because either would let a repair edit `job.sh`,
+/// another job, `lib/` or `triage.conf`.
 fn scopes(allow: &[PathBuf], job_dir: &Path) -> Result<Vec<Scope>, String> {
-    let workspace = workspace_root(job_dir);
     let job_canon = fs::canonicalize(job_dir).unwrap_or_else(|_| job_dir.to_path_buf());
     let mut out: Vec<Scope> = Vec::new();
     for entry in allow {
@@ -380,13 +379,17 @@ fn scopes(allow: &[PathBuf], job_dir: &Path) -> Result<Vec<Scope>, String> {
                 canon.display()
             ));
         }
-        if let Some(workspace) = &workspace {
-            if canon.starts_with(workspace) || workspace.starts_with(&canon) {
-                return Err(format!(
-                    "scope '{name}': {} overlaps the workspace, so it could reach job code or triage.conf",
-                    canon.display()
-                ));
-            }
+        // Walk the candidate's own path for the marker, not the job's. A
+        // registered job can live outside the workspace that lends it `lib/`
+        // and `triage.conf`, so walking up from the job directory found no
+        // workspace and let `manager=/ws/lib` through to `heal --apply`, which
+        // then rewrote the manager's own `lib/guards.sh`.
+        if let Some(workspace) = workspace_above(&canon) {
+            return Err(format!(
+                "scope '{name}': {} is inside the workspace {}, so it could reach job code or triage.conf",
+                canon.display(),
+                workspace.display()
+            ));
         }
         out.push(Scope::External {
             name: name.to_string(),
@@ -462,11 +465,14 @@ fn describe_scopes(scopes: &[Scope]) -> String {
         .join(", ")
 }
 
-fn workspace_root(job_dir: &Path) -> Option<PathBuf> {
-    job_dir
-        .ancestors()
-        .find(|dir| dir.join("lightsout.toml").is_file())
-        .and_then(|dir| fs::canonicalize(dir).ok())
+/// The workspace a path belongs to, if any: the nearest ancestor (or the path
+/// itself) that `repo::is_workspace` accepts. That covers the marked shape and
+/// the legacy `jobs/` + `lib/` shape, so a checkout without a marker is still
+/// protected.
+fn workspace_above(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|dir| crate::repo::is_workspace(dir))
+        .map(Path::to_path_buf)
 }
 
 /// Render `lib/prompts/repair.md` with the job's state, then redact it.

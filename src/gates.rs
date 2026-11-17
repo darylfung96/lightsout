@@ -215,6 +215,20 @@ fn capture(program: &str, args: &[&str]) -> io::Result<std::process::Output> {
 }
 
 fn sections(opts: &Opts) -> Result<(bool, String), String> {
+    let names: Vec<&str> = opts
+        .require
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect();
+    // With no section named, the only check left was the word bounds, whose
+    // defaults span everything: the gate passed without checking anything.
+    if names.is_empty() {
+        return Ok((
+            false,
+            "sections: --require is required; it names the headings to look for".into(),
+        ));
+    }
     let body = read_text(&opts.path).map_err(|e| py_os_error(&opts.path, &e))?;
     let words = body.split_whitespace().count();
     if (words as i64) < opts.min_words || (words as i64) > opts.max_words {
@@ -223,12 +237,7 @@ fn sections(opts: &Opts) -> Result<(bool, String), String> {
             format!("{words} words, want {}-{}", opts.min_words, opts.max_words),
         ));
     }
-    for name in opts
-        .require
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-    {
+    for name in &names {
         if !has_section(&body, name) {
             return Ok((
                 false,
@@ -236,13 +245,7 @@ fn sections(opts: &Opts) -> Result<(bool, String), String> {
             ));
         }
     }
-    Ok((
-        true,
-        format!(
-            "{words} words, {} sections",
-            opts.require.split(',').count()
-        ),
-    ))
+    Ok((true, format!("{words} words, {} sections", names.len())))
 }
 
 fn has_section(body: &str, name: &str) -> bool {
@@ -501,6 +504,15 @@ fn who(entry: &serde_json::Map<String, Value>, i: usize) -> String {
 }
 
 fn contains(opts: &Opts) -> (bool, String) {
+    // An empty needle matches every string, so a forgotten `--text` passed the
+    // gate on any artifact at all. The gate fails closed instead: without a
+    // needle there is nothing to look for.
+    if opts.text.is_empty() {
+        return (
+            false,
+            "contains: --text is required; an empty needle matches every file".into(),
+        );
+    }
     let body = match read_text(&opts.path) {
         Ok(body) => body,
         Err(e) => return (false, py_os_error(&opts.path, &e)),
