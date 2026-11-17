@@ -73,9 +73,11 @@ From the published tap:
 brew install darylfung96/lightsout/lightsout
 ```
 
-The tap formula builds from source with `cargo install --locked`, because a
-source build avoids shipping a quarantined macOS binary and does not need
-notarization secrets on the tap side. The formula template is in
+The tap formula builds from source with `cargo install *std_cargo_args`, because
+a source build avoids shipping a quarantined macOS binary and does not need
+notarization secrets on the tap side. Keep `--locked` out of the formula:
+`std_cargo_args` already passes it, and cargo refuses the flag twice. The
+formula template is in
 [`packaging/homebrew/lightsout.rb`](../packaging/homebrew/lightsout.rb); copy it
 into the tap after the first tag, because the live formula needs that tag's
 checksum.

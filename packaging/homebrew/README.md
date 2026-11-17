@@ -21,7 +21,9 @@ Then users install with:
 brew install darylfung96/lightsout/lightsout
 ```
 
-The formula builds from source with `cargo install --locked`, so macOS
-Gatekeeper does not quarantine a downloaded binary and no notarization secrets
-are needed on the tap side. The release workflow still codesigns prebuilt
-binaries for users who install from GitHub Releases.
+The formula builds from source with `system "cargo", "install", *std_cargo_args`,
+so macOS Gatekeeper does not quarantine a downloaded binary and no notarization
+secrets are needed on the tap side. Do not add `--locked` to that line:
+Homebrew's `std_cargo_args` already passes it, and cargo stops with
+`the argument '--locked' cannot be used multiple times`. The release workflow
+still codesigns prebuilt binaries for users who install from GitHub Releases.

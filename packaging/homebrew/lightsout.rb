@@ -9,7 +9,8 @@ class Lightsout < Formula
   depends_on "rust" => :build
 
   def install
-    system "cargo", "install", "--locked", *std_cargo_args
+    # std_cargo_args already passes --locked; cargo refuses a repeated flag.
+    system "cargo", "install", *std_cargo_args
   end
 
   test do
