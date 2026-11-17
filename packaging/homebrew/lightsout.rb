@@ -2,7 +2,7 @@ class Lightsout < Formula
   desc "Run contract, guards, gates and dashboard for unattended jobs"
   homepage "https://github.com/darylfung96/lightsout"
   url "https://github.com/darylfung96/lightsout/archive/refs/tags/v0.1.1.tar.gz"
-  sha256 "55a1edc2d323477a26bd896ab04ce6e3ca15ba3c2b131971273abcac56ad6673"
+  sha256 "a576b3b3a2dd67179978696dd7cdb539d89d14a80e139d11e68aab1805a0fa05"
   license "MIT"
   head "https://github.com/darylfung96/lightsout.git", branch: "main"
 
